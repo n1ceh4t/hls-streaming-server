@@ -137,20 +137,87 @@ async function setupDatabase(dbName, dbUser, dbPassword) {
 async function runMigrations() {
   console.log('\n🔄 Running database migrations...');
   try {
+    // Check if dependencies are installed
+    const nodeModulesPath = path.join(__dirname, '..', 'node_modules');
+    if (!fs.existsSync(nodeModulesPath)) {
+      console.error('❌ Dependencies not installed. Please run: npm install');
+      console.error('   Then run migrations manually with: npm run migrate');
+      return false;
+    }
+
+    // Check if psql is available (required for migrate.sh)
+    if (!commandExists('psql')) {
+      console.error('❌ psql command not found. PostgreSQL client tools are required.');
+      console.error('   Install with: sudo apt-get install postgresql-client');
+      return false;
+    }
+
     const { execSync } = require('child_process');
     execSync('npm run migrate', { stdio: 'inherit' });
     console.log('✅ Migrations completed successfully');
     return true;
   } catch (error) {
-    console.error('❌ Failed to run migrations. You can run them manually with: npm run migrate');
+    console.error('❌ Failed to run migrations');
+    if (error.message) {
+      console.error(`   Error: ${error.message}`);
+    }
+    console.error('   Possible causes:');
+    console.error('   - Database not running');
+    console.error('   - Wrong database credentials in .env');
+    console.error('   - Database not created yet');
+    console.error('   - PostgreSQL client tools not installed');
+    console.error('   You can run migrations manually with: npm run migrate');
     return false;
   }
+}
+
+function validatePort(portInput) {
+  const port = parseInt(portInput, 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    return { valid: false, port: null };
+  }
+  return { valid: true, port };
+}
+
+function validateMediaPaths(mediaDirsInput) {
+  if (!mediaDirsInput || !mediaDirsInput.trim()) {
+    return { valid: false, dirs: [], warnings: ['Media directories cannot be empty'] };
+  }
+
+  const dirs = mediaDirsInput.split(',').map(d => d.trim()).filter(d => d.length > 0);
+  const warnings = [];
+
+  for (const dir of dirs) {
+    // Check if path exists
+    if (!fs.existsSync(dir)) {
+      warnings.push(`⚠️  Directory does not exist: ${dir}`);
+    } else {
+      // Check if it's actually a directory
+      try {
+        const stat = fs.statSync(dir);
+        if (!stat.isDirectory()) {
+          warnings.push(`⚠️  Path is not a directory: ${dir}`);
+        }
+      } catch (err) {
+        warnings.push(`⚠️  Cannot access path: ${dir}`);
+      }
+    }
+  }
+
+  return { valid: dirs.length > 0, dirs, warnings };
 }
 
 async function setup() {
   console.log('\n╔═══════════════════════════════════════════════════╗');
   console.log('║   HLS/IPTV Streaming Server - Quick Setup       ║');
   console.log('╚═══════════════════════════════════════════════════╝\n');
+
+  // Check if dependencies are installed (optional check, don't fail if not)
+  const nodeModulesPath = path.join(__dirname, '..', 'node_modules');
+  if (!fs.existsSync(nodeModulesPath)) {
+    console.log('⚠️  Note: Dependencies not yet installed.');
+    console.log('   You can run this setup before or after npm install.\n');
+  }
 
   // Check if .env already exists
   const envPath = path.join(__dirname, '..', '.env');
@@ -161,15 +228,45 @@ async function setup() {
       rl.close();
       return;
     }
+    // Backup existing .env
+    const backupPath = `${envPath}.backup.${Date.now()}`;
+    try {
+      fs.copyFileSync(envPath, backupPath);
+      console.log(`✅ Backed up existing .env to ${path.basename(backupPath)}\n`);
+    } catch (err) {
+      console.log('⚠️  Could not backup existing .env file\n');
+    }
   }
 
   console.log('Let\'s configure your server!\n');
 
-  // Media directories
+  // Media directories with validation
   console.log('📁 Media Directories');
   console.log('Enter the paths to your media files (comma-separated)');
   console.log('Example: /media/movies,/media/shows,/home/user/Videos\n');
-  const mediaDirs = await question('Media directories: ');
+  
+  let mediaDirs;
+  let mediaDirsValid = false;
+  while (!mediaDirsValid) {
+    const mediaDirsInput = await question('Media directories: ');
+    const validation = validateMediaPaths(mediaDirsInput);
+    
+    if (validation.valid) {
+      mediaDirs = validation.dirs.join(',');
+      if (validation.warnings.length > 0) {
+        console.log('');
+        validation.warnings.forEach(w => console.log(w));
+        const proceed = await question('\nContinue anyway? (y/N): ');
+        if (proceed.toLowerCase() === 'y') {
+          mediaDirsValid = true;
+        }
+      } else {
+        mediaDirsValid = true;
+      }
+    } else {
+      console.log('❌ Invalid input. Please enter at least one valid directory path.');
+    }
+  }
 
   // API Key
   console.log('\n🔐 Security');
@@ -182,9 +279,20 @@ async function setup() {
     console.log(`Generated API key: ${apiKey}`);
   }
 
-  // Port
+  // Port with validation
   console.log('\n🌐 Network');
-  const port = await question('Server port (default: 8080): ') || '8080';
+  let port;
+  let portValid = false;
+  while (!portValid) {
+    const portInput = await question('Server port (default: 8080): ') || '8080';
+    const validation = validatePort(portInput);
+    if (validation.valid) {
+      port = validation.port;
+      portValid = true;
+    } else {
+      console.log('❌ Invalid port. Please enter a number between 1 and 65535.');
+    }
+  }
 
   // Streaming quality
   console.log('\n🎬 Streaming Quality');
@@ -237,10 +345,24 @@ async function setup() {
     const createNewUser = await question('Create a new database user? (Y/n): ') || 'y';
     if (createNewUser.toLowerCase() !== 'n') {
       dbUser = await question('Database user name (default: hls_user): ') || 'hls_user';
-      dbPassword = await question('Database password: ') || crypto.randomBytes(8).toString('hex');
-      if (!dbPassword || dbPassword.length < 8) {
-        dbPassword = crypto.randomBytes(8).toString('hex');
-        console.log(`Generated password: ${dbPassword}`);
+      
+      // Password generation options
+      console.log('\nPassword options:');
+      console.log('1. Generate a random secure password (recommended)');
+      console.log('2. Enter your own password');
+      const passwordChoice = await question('Choose option (1/2, default: 1): ') || '1';
+      
+      if (passwordChoice === '2') {
+        dbPassword = await question('Database password (min 8 characters): ');
+        if (!dbPassword || dbPassword.length < 8) {
+          console.log('⚠️  Password too short. Generating a secure random password instead...');
+          dbPassword = crypto.randomBytes(16).toString('hex');
+          console.log(`Generated password: ${dbPassword}`);
+        }
+      } else {
+        dbPassword = crypto.randomBytes(16).toString('hex');
+        console.log(`✅ Generated secure password: ${dbPassword}`);
+        console.log('⚠️  IMPORTANT: Save this password! It will be saved to your .env file.');
       }
     } else {
       dbUser = await question('Database user (default: postgres): ') || 'postgres';
@@ -350,11 +472,17 @@ DB_SSL=${dbUseSsl}` : '# Database disabled - configure DB_* variables to enable'
   }
 
   console.log('\n🚀 Next steps:');
-  console.log('   1. Install dependencies:');
-  console.log('      npm install --no-bin-links');
-  console.log('      (Use --no-bin-links if you encounter symlink permission errors)');
   
-  let stepNum = 2;
+  let stepNum = 1;
+  
+  // Only mention npm install if dependencies aren't installed
+  if (!fs.existsSync(nodeModulesPath)) {
+    console.log(`   ${stepNum}. Install dependencies:`);
+    console.log('      npm install --no-bin-links');
+    console.log('      (Recommended: --no-bin-links avoids symlink issues on Windows/WSL/Docker)');
+    console.log('      (Or use: npm install if symlinks work on your system)');
+    stepNum++;
+  }
   if (useDatabase.toLowerCase() !== 'n') {
     if (!dbSetupSuccess) {
       console.log(`   ${stepNum}. Set up PostgreSQL database:`);

@@ -1,7 +1,7 @@
 {
   "name": "hls-iptv-server",
   "version": "1.0.0",
-  "description": "Production-ready HLS/IPTV streaming server - Easy setup, configurable, and scalable",
+  "description": "HLS/IPTV streaming server - Easy setup, configurable, and scalable",
   "main": "dist/index.js",
   "scripts": {
     "dev": "node node_modules/tsx/dist/cli.mjs watch src/index.ts",

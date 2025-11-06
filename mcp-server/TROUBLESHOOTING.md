@@ -95,15 +95,15 @@ If there are errors, fix them.
 
 ## Step 7: Restart Alpaca Completely
 
-1. **Fully quit Alpaca:**
+1. Fully quit Alpaca:
    ```bash
    # Kill any running Alpaca processes
    pkill -f Alpaca
    ```
 
-2. **Wait a few seconds**
+2. Wait a few seconds
 
-3. **Restart Alpaca** from the applications menu
+3. Restart Alpaca from the applications menu
 
 ## Step 8: Test MCP Server Manually
 
@@ -166,16 +166,16 @@ Refer to Alpaca's official documentation or GitHub repository:
 ## Common Issues
 
 ### Issue: "Permission denied"
-**Solution:** Make sure the wrapper script is executable:
+Solution: Make sure the wrapper script is executable:
 ```bash
 chmod +x ~/.local/share/alpaca/mcp-servers/hls-streaming/run-mcp.sh
 ```
 
 ### Issue: "Node.js not found"
-**Solution:** The wrapper script should find Node.js automatically. If not, update the path in `run-mcp.sh`.
+Solution: The wrapper script should find Node.js automatically. If not, update the path in `run-mcp.sh`.
 
 ### Issue: "MCP server crashes"
-**Solution:** Enable debug mode:
+Solution: Enable debug mode:
 ```json
 "DEBUG": "true"
 ```
@@ -189,16 +189,16 @@ Then check Alpaca logs for error messages.
 
 ## Still Not Working?
 
-1. **Check Alpaca's GitHub Issues:**
+1. Check Alpaca's GitHub Issues:
    - Search for "MCP" related issues
    - Look for configuration examples from other users
 
-2. **Verify MCP Protocol:**
+2. Verify MCP Protocol:
    - The MCP server uses stdio mode
    - Alpaca should spawn it as a subprocess
    - Check if Alpaca supports MCP protocol v1.0
 
-3. **Try a Different Approach:**
+3. Try a Different Approach:
    - Create a Flatpak extension for the MCP server
    - Or install Alpaca from source if using Flatpak causes issues
 

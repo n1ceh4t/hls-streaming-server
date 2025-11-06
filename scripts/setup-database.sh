@@ -50,9 +50,62 @@ if [[ $REPLY =~ ^[Nn]$ ]]; then
     echo "Using existing 'postgres' user"
 else
     USE_USER="$NEW_DB_USER"
+    
+    # Prompt for password or generate one
+    echo ""
+    echo "Database password options:"
+    echo "1. Generate a random secure password (recommended)"
+    echo "2. Enter your own password"
+    read -p "Choose option (1/2, default: 1): " -n 1 -r
+    echo
+    
+    if [[ $REPLY =~ ^[2]$ ]]; then
+        # Prompt for password (with hidden input if possible)
+        read -sp "Enter password for $NEW_DB_USER (min 8 characters): " DB_PASSWORD
+        echo
+        if [ -z "$DB_PASSWORD" ] || [ ${#DB_PASSWORD} -lt 8 ]; then
+            echo "⚠️  Password too short. Generating a secure random password instead..."
+            DB_PASSWORD=$(openssl rand -base64 24 | tr -d "=+/" | cut -c1-24)
+            echo "Generated password: $DB_PASSWORD"
+        fi
+    else
+        # Generate secure random password
+        if command -v openssl &> /dev/null; then
+            DB_PASSWORD=$(openssl rand -base64 24 | tr -d "=+/" | cut -c1-24)
+        elif command -v shasum &> /dev/null; then
+            # macOS fallback
+            DB_PASSWORD=$(date +%s | shasum -a 256 | base64 | head -c 24)
+        elif command -v sha256sum &> /dev/null; then
+            # Linux fallback
+            DB_PASSWORD=$(date +%s | sha256sum | base64 | head -c 24)
+        else
+            # Last resort: use /dev/urandom if available
+            if [ -c /dev/urandom ]; then
+                DB_PASSWORD=$(head -c 24 /dev/urandom | base64 | tr -d "=+/" | head -c 24)
+            else
+                # Pure bash fallback (less secure but portable)
+                DB_PASSWORD=$(echo "$(date +%s)$RANDOM" | openssl dgst -sha256 | cut -d' ' -f2 | head -c 24)
+                if [ -z "$DB_PASSWORD" ]; then
+                    echo "❌ Error: Could not generate password. Please enter one manually."
+                    read -sp "Enter password for $NEW_DB_USER (min 8 characters): " DB_PASSWORD
+                    echo
+                    if [ -z "$DB_PASSWORD" ] || [ ${#DB_PASSWORD} -lt 8 ]; then
+                        echo "❌ Password too short or empty. Exiting."
+                        exit 1
+                    fi
+                fi
+            fi
+        fi
+        echo "✅ Generated secure password: $DB_PASSWORD"
+        echo "⚠️  IMPORTANT: Save this password! You'll need it for your .env file."
+    fi
+    
     # Create new user
-    sudo -u postgres psql -c "CREATE USER $NEW_DB_USER WITH PASSWORD 'hls_password_123';" 2>/dev/null || echo "User may already exist, continuing..."
-    echo "✅ Created user: $NEW_DB_USER"
+    sudo -u postgres psql -c "CREATE USER $NEW_DB_USER WITH PASSWORD '$DB_PASSWORD';" 2>/dev/null || {
+        echo "User may already exist. Attempting to update password..."
+        sudo -u postgres psql -c "ALTER USER $NEW_DB_USER WITH PASSWORD '$DB_PASSWORD';" 2>/dev/null || echo "⚠️  Could not update existing user. Please set password manually."
+    }
+    echo "✅ Created/updated user: $NEW_DB_USER"
 fi
 
 # Create database
@@ -86,10 +139,11 @@ cp "$ENV_FILE" "$ENV_FILE.backup"
 # Update or add database configuration
 if [ "$USE_USER" != "postgres" ]; then
     DB_USER_VALUE="$NEW_DB_USER"
-    DB_PASSWORD_VALUE="hls_password_123"
+    DB_PASSWORD_VALUE="$DB_PASSWORD"
     echo ""
-    echo "⚠️  IMPORTANT: The database password has been set to: $DB_PASSWORD_VALUE"
-    echo "   Please change this in production! Update it in PostgreSQL and .env file."
+    echo "⚠️  IMPORTANT: Save your database password!"
+    echo "   Password: $DB_PASSWORD_VALUE"
+    echo "   This password will be saved to your .env file."
 else
     DB_USER_VALUE="postgres"
     DB_PASSWORD_VALUE=""
@@ -126,10 +180,9 @@ echo ""
 echo "🚀 Next steps:"
 echo "   1. Review and update .env file if needed"
 if [ "$USE_USER" != "postgres" ]; then
-    echo "   2. Change the database password in PostgreSQL:"
-    echo "      sudo -u postgres psql -c \"ALTER USER $NEW_DB_USER WITH PASSWORD 'your_secure_password';\""
-    echo "   3. Update DB_PASSWORD in .env to match"
+    echo "   2. ✅ Database password has been saved to .env"
+    echo "      (Keep this password secure - it's already configured)"
 fi
-echo "   4. Run migrations: npm run migrate"
+echo "   3. Run migrations: npm run migrate"
 echo ""
 

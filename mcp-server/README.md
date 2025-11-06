@@ -1,16 +1,16 @@
 # HLS Streaming Server MCP Tool
 
-Model Context Protocol (MCP) server for managing HLS streaming channels, media libraries, and dynamic playlists through AI assistants like Claude.
+Model Context Protocol (MCP) server for managing HLS streaming channels, media libraries, and dynamic playlists through AI assistants.
 
 ## Overview
 
-This MCP server exposes the complete HLS Streaming Server API as tools that AI assistants can use to:
+This MCP server exposes the HLS Streaming Server API as tools that AI assistants can use to:
 
-- **Manage Channels**: Create, configure, start/stop streaming channels
-- **Organize Media**: Scan libraries, create buckets, assign content
-- **Schedule Programming**: Build time-based dynamic playlists
-- **Monitor Streaming**: Check channel status, current programs, EPG data
-- **Control Playback**: Skip to next, restart channels, adjust settings
+- Manage channels: Create, configure, start/stop streaming channels
+- Organize media: Scan libraries, create buckets, assign content
+- Schedule programming: Build time-based dynamic playlists
+- Monitor streaming: Check channel status, current programs, EPG data
+- Control playback: Skip to next, restart channels, adjust settings
 
 ## Architecture
 
@@ -80,9 +80,9 @@ DEBUG=false
 
 Add to your Claude Desktop configuration:
 
-**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-**Linux:** `~/.config/Claude/claude_desktop_config.json`
+macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+Linux: `~/.config/Claude/claude_desktop_config.json`
 
 ```json
 {
@@ -103,7 +103,7 @@ Add to your Claude Desktop configuration:
 
 The MCP server will be available as tools in Claude.
 
-**Note:** MCP servers run directly via stdio with MCP clients (like Claude Desktop), not as standalone Docker containers. They are launched by the MCP client process itself.
+Note: MCP servers run directly via stdio with MCP clients (like Claude Desktop), not as standalone Docker containers. They are launched by the MCP client process itself.
 
 ## Available Tools
 
@@ -156,36 +156,36 @@ The MCP server will be available as tools in Claude.
 ### System (1 tool)
 - `get_health` - Check server health
 
-**Total: 35 tools** covering the complete API surface
+Total: 35 tools covering the API surface
 
 ## Usage Examples
 
 ### Example 1: Basic Channel Setup
 
-**User Prompt:**
+User Prompt:
 > "Create a new channel called 'Comedy Central' with slug 'comedy' and start it streaming"
 
-**Claude Actions:**
+Claude Actions:
 1. Calls `create_channel` with name and slug
 2. Calls `start_channel` with the returned channel ID
 3. Calls `get_channel` to verify it's streaming
 
 ### Example 2: Library Setup
 
-**User Prompt:**
+User Prompt:
 > "Add my movies folder at /media/movies as a library and scan it"
 
-**Claude Actions:**
+Claude Actions:
 1. Calls `create_library` with path and category 'movies'
 2. Calls `scan_library` with the returned library ID
 3. Reports scan results (files found, duration, etc.)
 
 ### Example 3: Build a 24/7 Channel
 
-**User Prompt:**
+User Prompt:
 > "Create a 24/7 sitcom channel. Play Friends from 8am-12pm on weekdays, The Office from 12pm-6pm daily, and Seinfeld from 6pm-11pm"
 
-**Claude Actions:**
+Claude Actions:
 1. Calls `create_channel` with `useDynamicPlaylist: true`
 2. Calls `search_media` to find Friends episodes
 3. Calls `create_bucket` for each show
@@ -198,20 +198,20 @@ The MCP server will be available as tools in Claude.
 
 ### Example 4: Monitor Current Programming
 
-**User Prompt:**
+User Prompt:
 > "What's currently playing on all my channels?"
 
-**Claude Actions:**
+Claude Actions:
 1. Calls `list_channels`
 2. For each channel, calls `get_current_program` with the slug
 3. Summarizes what's playing now and what's next
 
 ### Example 5: Quick Content Search
 
-**User Prompt:**
+User Prompt:
 > "Find all Star Wars movies and add them to a bucket called 'Star Wars Marathon'"
 
-**Claude Actions:**
+Claude Actions:
 1. Calls `search_media` with search term "star wars"
 2. Filters results to movies category
 3. Calls `create_bucket` with name "Star Wars Marathon"
@@ -286,12 +286,12 @@ The MCP server will be available as tools in Claude.
 
 ### Use Case 1: Automated Content Curator
 
-**Scenario:** Build an AI assistant that automatically organizes your media library
+Scenario: Build an AI assistant that organizes your media library
 
-**Prompt:**
+Prompt:
 > "Analyze my entire media library and create themed buckets. Group content by: genre, decade, mood (action-packed, relaxing, comedy), and holiday themes. Then create suggested channel schedules based on typical viewer patterns."
 
-**What Claude Does:**
+What Claude Does:
 1. Scans all libraries
 2. Uses `search_media` extensively
 3. Creates buckets based on metadata patterns
@@ -300,9 +300,9 @@ The MCP server will be available as tools in Claude.
 
 ### Use Case 2: Smart Channel Scheduler
 
-**Scenario:** Dynamic programming based on time of day and day of week
+Scenario: Dynamic programming based on time of day and day of week
 
-**Prompt:**
+Prompt:
 > "Create a family-friendly channel with this schedule:
 > - Weekday mornings (6am-9am): Kids cartoons
 > - Weekday afternoons (3pm-6pm): Teen shows
@@ -310,7 +310,7 @@ The MCP server will be available as tools in Claude.
 > - Weekend mornings (8am-12pm): Kids movies
 > - Weekend evenings (7pm-11pm): Blockbuster movies"
 
-**Claude Creates:**
+Claude Creates:
 - 5 different buckets for each content type
 - 5 schedule blocks with appropriate day/time settings
 - Configures priorities for overlapping times
@@ -318,12 +318,12 @@ The MCP server will be available as tools in Claude.
 
 ### Use Case 3: Series Marathon Manager
 
-**Scenario:** Set up binge-watching marathons
+Scenario: Set up binge-watching marathons
 
-**Prompt:**
+Prompt:
 > "Create a Marvel Cinematic Universe marathon channel. Play all movies in chronological order, then restart. Also create a 'Best Episodes' channel with the top-rated episodes from Breaking Bad, Game of Thrones, and The Sopranos."
 
-**Claude Creates:**
+Claude Creates:
 - Searches for all Marvel movies
 - Creates ordered bucket with correct sequence
 - Sets up sequential playback
@@ -332,12 +332,12 @@ The MCP server will be available as tools in Claude.
 
 ### Use Case 4: Live Sports Rotation
 
-**Scenario:** Manage sports content library
+Scenario: Manage sports content library
 
-**Prompt:**
+Prompt:
 > "Set up a sports channel that plays NBA games during basketball season (Oct-Apr) and NFL games during football season (Sep-Feb). Fill other times with classic games."
 
-**Claude Creates:**
+Claude Creates:
 - Multiple buckets for different sports
 - Schedule blocks with seasonal timing
 - Fallback content for off-season
@@ -345,12 +345,12 @@ The MCP server will be available as tools in Claude.
 
 ### Use Case 5: Music Video Channel
 
-**Scenario:** MTV-style music channel
+Scenario: MTV-style music channel
 
-**Prompt:**
+Prompt:
 > "Build a music video channel that plays different genres throughout the day: EDM in the morning (6am-10am), Pop during midday (10am-4pm), Rock in the afternoon (4pm-8pm), and Hip-Hop at night (8pm-2am)."
 
-**Claude Creates:**
+Claude Creates:
 - Genre-based buckets from music library
 - Time-of-day schedule blocks
 - Shuffle playback mode for variety
@@ -360,19 +360,19 @@ The MCP server will be available as tools in Claude.
 
 ### Phase 1: Enhanced Intelligence
 
-**1. Predictive Scheduling**
+1. Predictive Scheduling
 ```typescript
 // New tool: analyze_viewership
 // Analyzes viewer sessions and suggests optimal schedule times
 ```
 
-**2. Content Recommendations**
+2. Content Recommendations
 ```typescript
 // New tool: recommend_content
 // ML-based recommendations for what to add to channels
 ```
 
-**3. Automated Quality Control**
+3. Automated Quality Control
 ```typescript
 // New tool: validate_media
 // Checks media files for corruption, codec issues, etc.
@@ -380,7 +380,7 @@ The MCP server will be available as tools in Claude.
 
 ### Phase 2: Advanced Features
 
-**4. Playlist Templates**
+4. Playlist Templates
 ```typescript
 // New tools:
 // - save_schedule_template
@@ -389,7 +389,7 @@ The MCP server will be available as tools in Claude.
 // Pre-configured schedule patterns (e.g., "24hr news cycle", "sitcom rotation")
 ```
 
-**5. Bulk Operations**
+5. Bulk Operations
 ```typescript
 // New tools:
 // - bulk_create_channels
@@ -397,7 +397,7 @@ The MCP server will be available as tools in Claude.
 // - bulk_import_from_csv
 ```
 
-**6. Analytics Integration**
+6. Analytics Integration
 ```typescript
 // New tools:
 // - get_channel_analytics
@@ -407,7 +407,7 @@ The MCP server will be available as tools in Claude.
 
 ### Phase 3: External Integrations
 
-**7. Metadata Enrichment**
+7. Metadata Enrichment
 ```typescript
 // New tools:
 // - fetch_tmdb_metadata
@@ -416,7 +416,7 @@ The MCP server will be available as tools in Claude.
 // Integrate with TMDB/TVDB for better metadata
 ```
 
-**8. Discord/Slack Notifications**
+8. Discord/Slack Notifications
 ```typescript
 // New tools:
 // - configure_notifications
@@ -424,7 +424,7 @@ The MCP server will be available as tools in Claude.
 // Real-time alerts for channel issues
 ```
 
-**9. Plex/Jellyfin Import**
+9. Plex/Jellyfin Import
 ```typescript
 // New tools:
 // - import_from_plex
@@ -434,20 +434,20 @@ The MCP server will be available as tools in Claude.
 
 ### Phase 4: AI-Powered Features
 
-**10. Natural Language Scheduling**
+10. Natural Language Scheduling
 ```typescript
 // Enhanced create_schedule_block with NLP
 // "Play comedies on Friday nights" → parses into schedule block
 ```
 
-**11. Smart Content Matching**
+11. Smart Content Matching
 ```typescript
 // New tool: smart_search
 // "Find episodes where the main character gets married"
 // Uses AI to understand plot points from descriptions
 ```
 
-**12. Automated Highlight Reels**
+12. Automated Highlight Reels
 ```typescript
 // New tools:
 // - detect_highlights (finds exciting moments in sports)
@@ -456,7 +456,7 @@ The MCP server will be available as tools in Claude.
 
 ### Phase 5: Multi-Server Support
 
-**13. Distributed Channels**
+13. Distributed Channels
 ```typescript
 // New tools for managing multiple HLS servers:
 // - list_servers
@@ -464,7 +464,7 @@ The MCP server will be available as tools in Claude.
 // - load_balance_channels
 ```
 
-**14. Content Replication**
+14. Content Replication
 ```typescript
 // New tools:
 // - replicate_bucket_to_server
@@ -473,7 +473,7 @@ The MCP server will be available as tools in Claude.
 
 ### Phase 6: Interactive Features
 
-**15. Live Voting**
+15. Live Voting
 ```typescript
 // New tools:
 // - create_poll (what to watch next)
@@ -481,7 +481,7 @@ The MCP server will be available as tools in Claude.
 // - apply_vote_winner_to_channel
 ```
 
-**16. Request System**
+16. Request System
 ```typescript
 // New tools:
 // - submit_content_request
@@ -491,17 +491,17 @@ The MCP server will be available as tools in Claude.
 
 ### Implementation Priority
 
-**High Priority (Immediate Value):**
+High Priority (Immediate Value):
 1. Playlist Templates (#4) - Save time on common schedules
 2. Analytics Integration (#6) - Understand viewership
 3. Metadata Enrichment (#7) - Better content organization
 
-**Medium Priority (Nice to Have):**
+Medium Priority (Nice to Have):
 4. Bulk Operations (#5) - Efficiency for large libraries
 5. Automated Quality Control (#3) - Prevent streaming issues
 6. Discord/Slack Notifications (#8) - Real-time monitoring
 
-**Low Priority (Future Expansion):**
+Low Priority (Future Expansion):
 7. Multi-Server Support (#13, #14) - For large deployments
 8. Interactive Features (#15, #16) - Community engagement
 9. AI-Powered Features (#10, #11, #12) - Advanced capabilities
@@ -540,9 +540,9 @@ node dist/index.js
 
 ### Connection Issues
 
-**Problem:** MCP server can't connect to HLS streaming server
+Problem: MCP server can't connect to HLS streaming server
 
-**Solution:**
+Solution:
 - Check `HLS_SERVER_URL` in your environment
 - Verify the streaming server is running
 - Test with curl: `curl http://localhost:8080/health`
@@ -551,7 +551,7 @@ node dist/index.js
 
 **Problem:** Getting 401 Unauthorized errors
 
-**Solution:**
+Solution:
 - Verify your `HLS_API_KEY` or `HLS_SESSION_TOKEN`
 - Check the streaming server's authentication settings
 - Try authenticating manually: `curl -H "X-API-Key: your-key" http://localhost:8080/api/channels`
@@ -560,7 +560,7 @@ node dist/index.js
 
 **Problem:** MCP tools don't appear in Claude Desktop
 
-**Solution:**
+Solution:
 - Check Claude Desktop config file path
 - Verify JSON syntax is valid
 - Check Claude logs: `~/Library/Logs/Claude/mcp*.log`
@@ -570,7 +570,7 @@ node dist/index.js
 
 **Problem:** Tools return errors when called
 
-**Solution:**
+Solution:
 - Check the streaming server logs
 - Verify the parameters match expected types
 - Enable debug logging: `DEBUG=true` in `.env`

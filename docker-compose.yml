@@ -9,6 +9,12 @@ services:
       - "8081:8081"
     volumes:
       # Mount your media directories here
+      # Replace with your actual media paths on the host system
+      # Format: /host/path:/container/path:ro
+      # Example for multiple directories:
+      # - /media/movies:/media/movies:ro
+      # - /media/shows:/media/shows:ro
+      # - /home/user/Videos:/media/videos:ro
       - /path/to/your/media:/media:ro
       # HLS output (persisted)
       - ./hls_output:/app/hls_output

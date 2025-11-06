@@ -58,37 +58,89 @@ echo ""
 
 # Install dependencies
 echo -e "${BLUE}📦 Installing dependencies...${NC}"
-npm ci
+echo -e "${YELLOW}💡 Tip: Using --no-bin-links is recommended to avoid symlink issues on Windows/WSL/Docker${NC}"
+if [ -f package-lock.json ]; then
+    npm ci --no-bin-links
+else
+    echo -e "${YELLOW}⚠️  package-lock.json not found. Using npm install instead...${NC}"
+    npm install --no-bin-links
+fi
 
 # Setup environment
 if [ ! -f .env ]; then
-    echo -e "${BLUE}📝 Creating .env file from template...${NC}"
-    cp .env.example .env
-    echo -e "${YELLOW}⚠️  IMPORTANT: Please edit .env and configure:${NC}"
-    echo "   - MEDIA_DIRECTORIES: Paths to your media files"
-    echo "   - API_KEY: A secure random string for authentication"
+    echo -e "${BLUE}📝 Setting up environment configuration...${NC}"
     echo ""
+    echo -e "${YELLOW}You can either:${NC}"
+    echo "  1. Run interactive setup: npm run setup (recommended)"
+    echo "  2. Copy .env.example and edit manually"
+    echo ""
+    read -p "Run interactive setup now? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        echo ""
+        node scripts/setup.js
+        echo ""
+        echo -e "${GREEN}✅ Interactive setup completed${NC}"
+    else
+        cp .env.example .env
+        echo -e "${YELLOW}⚠️  IMPORTANT: Please edit .env and configure:${NC}"
+        echo "   - MEDIA_DIRECTORIES: Paths to your media files"
+        echo "   - API_KEY: A secure random string for authentication"
+        echo ""
+    fi
 else
     echo -e "${GREEN}✅ .env file already exists${NC}"
 fi
 
 # Build
 echo -e "${BLUE}🔨 Building application...${NC}"
-npm run build
+if npm run build; then
+    echo -e "${GREEN}✅ Build completed successfully${NC}"
+else
+    echo -e "${RED}❌ Build failed. Please check errors above.${NC}"
+    exit 1
+fi
 
 # Setup database
 echo -e "${BLUE}🗄️  Setting up database...${NC}"
-echo -e "${YELLOW}⚠️  Make sure PostgreSQL is running and configured.${NC}"
-echo ""
-read -p "Run database migrations now? (y/N) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    npm run migrate
+
+# Check if database is configured in .env
+if [ -f .env ] && grep -q "^DB_HOST=" .env 2>/dev/null; then
+    echo -e "${GREEN}✅ Database configuration found in .env${NC}"
+    
+    # Check if psql is available
+    if ! command -v psql &> /dev/null; then
+        echo -e "${YELLOW}⚠️  psql command not found. PostgreSQL client tools are required for migrations.${NC}"
+        echo "   Install with: sudo apt-get install postgresql-client"
+        echo ""
+        read -p "Continue anyway? (y/N) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${YELLOW}⚠️  Skipping migrations. Install PostgreSQL client and run 'npm run migrate' when ready.${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Skipping migrations. Run 'npm run migrate' when PostgreSQL client is installed.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  Make sure PostgreSQL is running and configured.${NC}"
+        echo ""
+        read -p "Run database migrations now? (y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            if npm run migrate; then
+                echo -e "${GREEN}✅ Migrations completed successfully${NC}"
+            else
+                echo -e "${RED}❌ Migrations failed. You can run them manually with: npm run migrate${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⚠️  Skipping migrations. Run 'npm run migrate' when ready.${NC}"
+        fi
+    fi
 else
-    echo -e "${YELLOW}⚠️  Skipping migrations. Run 'npm run migrate' when ready.${NC}"
+    echo -e "${YELLOW}⚠️  Database not configured in .env. Skipping migrations.${NC}"
+    echo "   Configure database in .env file, then run: npm run migrate"
 fi
 
-# Create necessary directories
+# Create necessary directories (before build, but also ensure they exist after)
 echo -e "${BLUE}📁 Creating directories...${NC}"
 mkdir -p hls_output temp logs data
 
@@ -101,21 +153,21 @@ echo ""
 echo -e "${GREEN}✅ Installation complete!${NC}"
 echo ""
 echo "Next steps:"
-echo "1. Edit .env file and configure your settings:"
-echo "   - MEDIA_DIRECTORIES: Paths to your media files"
-echo "   - API_KEY: Generate a secure random string"
-echo ""
-echo "2. Configure database connection in .env (if using PostgreSQL)"
-echo ""
-echo "3. Start the server:"
-echo "   npm start           # Production mode"
+if [ ! -f .env ]; then
+    echo "1. Run interactive setup:"
+    echo "   npm run setup"
+    echo ""
+    echo "   Or manually configure .env file"
+    echo ""
+fi
+echo "2. Start the server:"
+echo "   npm start           # Start server"
 echo "   npm run dev         # Development mode with auto-reload"
 echo ""
-echo "4. Access the server:"
+echo "3. Access the server:"
 echo "   API: http://localhost:8080/api/channels"
 echo "   Admin Panel: http://localhost:8080/admin/"
 echo ""
-echo "5. Read the documentation:"
+echo "4. Read the documentation:"
 echo "   - README.md for full documentation"
-echo "   - QUICK_START.md for quick start guide"
 echo ""
