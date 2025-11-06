@@ -1,0 +1,1738 @@
+openapi: 3.0.3
+info:
+  title: HLS Streaming Server API
+  description: |
+    Complete REST API for managing HLS streaming channels, media libraries, and dynamic playlists.
+
+    ## Features
+    - Multi-channel HLS streaming with FFmpeg
+    - Dynamic playlist generation via schedule blocks
+    - Jellyfin-style library management
+    - Media bucket organization
+    - EPG/XMLTV generation
+    - IPTV M3U playlist export
+    - Session-based authentication
+    - Virtual time tracking for 24/7 simulation
+
+    ## Authentication
+    The API supports two authentication methods:
+    1. **API Key** (Legacy): Pass via `X-API-Key` header or `apiKey` query parameter
+    2. **Session Token** (Modern): Pass via `Authorization: Bearer <token>` header or `sessionToken` cookie
+
+    Most endpoints require authentication except for streaming and public EPG endpoints.
+
+  version: 1.0.0
+  contact:
+    name: HLS Streaming Server
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+  - url: https://your-server.com
+    description: Production server
+
+tags:
+  - name: Health
+    description: Server health and status
+  - name: Authentication
+    description: User authentication and session management
+  - name: Channels
+    description: Channel management and control
+  - name: Streaming
+    description: HLS streaming endpoints
+  - name: EPG
+    description: Electronic Program Guide (IPTV/XMLTV)
+  - name: Libraries
+    description: Media library folder management
+  - name: Media
+    description: Media file search and browsing
+  - name: Buckets
+    description: Media bucket (collection) management
+  - name: Schedules
+    description: Schedule blocks for dynamic playlists
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    BearerAuth:
+      type: http
+      scheme: bearer
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionToken
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+        message:
+          type: string
+      required:
+        - success
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+      required:
+        - success
+        - error
+
+    Channel:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+        state:
+          type: string
+          enum: [idle, starting, streaming, stopping, error]
+        config:
+          type: object
+          properties:
+            videoBitrate:
+              type: integer
+            audioBitrate:
+              type: integer
+            resolution:
+              type: string
+              example: "1920x1080"
+            fps:
+              type: integer
+            segmentDuration:
+              type: integer
+            autoStart:
+              type: boolean
+            useDynamicPlaylist:
+              type: boolean
+            includeBumpers:
+              type: boolean
+        metadata:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CreateChannelRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "Movie Channel"
+        slug:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+          example: "movie-channel"
+        videoBitrate:
+          type: integer
+          default: 1500000
+        audioBitrate:
+          type: integer
+          default: 128000
+        resolution:
+          type: string
+          default: "1920x1080"
+        fps:
+          type: integer
+          default: 30
+        segmentDuration:
+          type: integer
+          default: 6
+        autoStart:
+          type: boolean
+          default: false
+        useDynamicPlaylist:
+          type: boolean
+          default: false
+        includeBumpers:
+          type: boolean
+          default: false
+      required:
+        - name
+        - slug
+
+    UpdateChannelRequest:
+      type: object
+      properties:
+        useDynamicPlaylist:
+          type: boolean
+        includeBumpers:
+          type: boolean
+        autoStart:
+          type: boolean
+
+    Library:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        path:
+          type: string
+        category:
+          type: string
+          enum: [movies, series, anime, sports, music, documentaries, standup, general]
+        enabled:
+          type: boolean
+        recursive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateLibraryRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "My Movies"
+        path:
+          type: string
+          example: "/media/movies"
+        category:
+          type: string
+          enum: [movies, series, anime, sports, music, documentaries, standup, general]
+        enabled:
+          type: boolean
+          default: true
+        recursive:
+          type: boolean
+          default: true
+      required:
+        - name
+        - path
+        - category
+
+    MediaBucket:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        bucketType:
+          type: string
+          enum: [global, channel_specific]
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateBucketRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "90s Sitcoms"
+        bucketType:
+          type: string
+          enum: [global, channel_specific]
+        description:
+          type: string
+      required:
+        - name
+        - bucketType
+
+    ScheduleBlock:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        channelId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        dayOfWeek:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 6
+          description: "0=Sunday, 6=Saturday"
+        startTime:
+          type: string
+          pattern: '^\d{2}:\d{2}:\d{2}$'
+          example: "20:00:00"
+        endTime:
+          type: string
+          pattern: '^\d{2}:\d{2}:\d{2}$'
+          example: "23:00:00"
+        bucketId:
+          type: string
+          format: uuid
+        playbackMode:
+          type: string
+          enum: [sequential, random, shuffle]
+        priority:
+          type: integer
+        enabled:
+          type: boolean
+
+    CreateScheduleBlockRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "Prime Time"
+        dayOfWeek:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 6
+          nullable: true
+        startTime:
+          type: string
+          pattern: '^\d{2}:\d{2}:\d{2}$'
+          example: "20:00:00"
+        endTime:
+          type: string
+          pattern: '^\d{2}:\d{2}:\d{2}$'
+          example: "23:00:00"
+        bucketId:
+          type: string
+          format: uuid
+        playbackMode:
+          type: string
+          enum: [sequential, random, shuffle]
+        priority:
+          type: integer
+        enabled:
+          type: boolean
+          default: true
+      required:
+        - name
+        - startTime
+        - endTime
+        - bucketId
+        - playbackMode
+        - priority
+
+    MediaFile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        filepath:
+          type: string
+        duration:
+          type: number
+        filesize:
+          type: integer
+        category:
+          type: string
+        libraryFolderId:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          properties:
+            showName:
+              type: string
+            season:
+              type: integer
+            episode:
+              type: integer
+
+    Program:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date-time
+        stop:
+          type: string
+          format: date-time
+        title:
+          type: string
+        description:
+          type: string
+
+paths:
+  # === HEALTH ===
+  /health:
+    get:
+      tags: [Health]
+      summary: Server health check
+      description: Returns server health status and version information
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          status:
+                            type: string
+                            example: "healthy"
+                          timestamp:
+                            type: string
+                            format: date-time
+                          version:
+                            type: string
+                          appName:
+                            type: string
+
+  # === AUTHENTICATION ===
+  /api/auth/setup-required:
+    get:
+      tags: [Authentication]
+      summary: Check if initial setup is required
+      description: Returns whether the system needs initial admin user setup
+      responses:
+        '200':
+          description: Setup status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          setupRequired:
+                            type: boolean
+
+  /api/auth/register:
+    post:
+      tags: [Authentication]
+      summary: Register first admin user
+      description: Register the first admin user (only works if no users exist)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                password:
+                  type: string
+                  minLength: 8
+                email:
+                  type: string
+                  format: email
+              required:
+                - username
+                - password
+      responses:
+        '200':
+          description: User registered successfully
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: sessionToken=abc123; Path=/; HttpOnly
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '400':
+          description: Validation error or users already exist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/login:
+    post:
+      tags: [Authentication]
+      summary: Login with credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+              required:
+                - username
+                - password
+      responses:
+        '200':
+          description: Login successful
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/auth/logout:
+    post:
+      tags: [Authentication]
+      summary: Logout and invalidate session
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/auth/me:
+    get:
+      tags: [Authentication]
+      summary: Get current user info
+      security:
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        '200':
+          description: Current user info
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          userId:
+                            type: string
+                            format: uuid
+                          username:
+                            type: string
+
+  # === CHANNELS ===
+  /api/channels:
+    get:
+      tags: [Channels]
+      summary: List all channels
+      responses:
+        '200':
+          description: List of channels
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Channel'
+
+    post:
+      tags: [Channels]
+      summary: Create new channel
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChannelRequest'
+      responses:
+        '200':
+          description: Channel created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Channel'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/channels/{channelId}:
+    get:
+      tags: [Channels]
+      summary: Get channel details
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Channel details
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/Channel'
+                          - type: object
+                            properties:
+                              mediaCount:
+                                type: integer
+                              currentMedia:
+                                $ref: '#/components/schemas/MediaFile'
+                              virtualTime:
+                                type: object
+        '404':
+          description: Channel not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags: [Channels]
+      summary: Update channel
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateChannelRequest'
+      responses:
+        '200':
+          description: Channel updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+    delete:
+      tags: [Channels]
+      summary: Delete channel
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Channel deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/channels/{channelId}/start:
+    post:
+      tags: [Channels]
+      summary: Start channel streaming
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Channel started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/channels/{channelId}/stop:
+    post:
+      tags: [Channels]
+      summary: Stop channel streaming
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Channel stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/channels/{channelId}/restart:
+    post:
+      tags: [Channels]
+      summary: Restart channel
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Channel restarted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/channels/{channelId}/next:
+    post:
+      tags: [Channels]
+      summary: Skip to next media
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Skipped to next
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/channels/{channelId}/media:
+    get:
+      tags: [Channels]
+      summary: Get channel playlist
+      description: Returns media files for channel (respects dynamic/static playlist mode)
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Channel playlist
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/MediaFile'
+
+  /api/channels/{channelId}/buckets:
+    get:
+      tags: [Channels]
+      summary: Get buckets assigned to channel
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Channel buckets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  # === STREAMING ===
+  /{slug}/master.m3u8:
+    get:
+      tags: [Streaming]
+      summary: HLS master playlist
+      description: Returns the master HLS playlist for a channel
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Master playlist
+          content:
+            application/vnd.apple.mpegurl:
+              schema:
+                type: string
+                example: |
+                  #EXTM3U
+                  #EXT-X-STREAM-INF:BANDWIDTH=1628000,RESOLUTION=1920x1080
+                  stream.m3u8
+
+  /{slug}/stream.m3u8:
+    get:
+      tags: [Streaming]
+      summary: HLS media playlist
+      description: Returns the media playlist with segment references
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Media playlist
+          content:
+            application/vnd.apple.mpegurl:
+              schema:
+                type: string
+
+  /{slug}/{segment}:
+    get:
+      tags: [Streaming]
+      summary: HLS video segment
+      description: Returns video segment (.ts file)
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: segment
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^stream_\d+\.ts$|^starting\.ts$'
+      responses:
+        '200':
+          description: Video segment
+          content:
+            video/mp2t:
+              schema:
+                type: string
+                format: binary
+
+  # === EPG ===
+  /playlist.m3u:
+    get:
+      tags: [EPG]
+      summary: IPTV M3U playlist
+      description: Returns M3U playlist with all channels
+      responses:
+        '200':
+          description: M3U playlist
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="channels.m3u"'
+          content:
+            audio/x-mpegurl:
+              schema:
+                type: string
+                example: |
+                  #EXTM3U
+                  #EXTINF:-1 tvg-id="uuid" tvg-name="Channel",Channel Name
+                  http://server/channel-slug/master.m3u8
+
+  /epg.xml:
+    get:
+      tags: [EPG]
+      summary: XMLTV EPG data
+      description: Returns Electronic Program Guide in XMLTV format
+      responses:
+        '200':
+          description: XMLTV EPG
+          content:
+            application/xml:
+              schema:
+                type: string
+
+  /api/epg/channels/{slug}:
+    get:
+      tags: [EPG]
+      summary: Get EPG for channel
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Channel EPG
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          channel:
+                            type: object
+                          programs:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/Program'
+
+  /api/epg/channels/{slug}/current:
+    get:
+      tags: [EPG]
+      summary: Get current and next program
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current program info
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          channel:
+                            type: object
+                          current:
+                            $ref: '#/components/schemas/Program'
+                          next:
+                            $ref: '#/components/schemas/Program'
+
+  /api/epg/refresh:
+    post:
+      tags: [EPG]
+      summary: Refresh all EPG data
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        '200':
+          description: EPG refreshed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/epg/channels/{channelId}/regenerate:
+    post:
+      tags: [EPG]
+      summary: Regenerate EPG for channel
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: EPG regenerated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  # === LIBRARIES ===
+  /api/libraries:
+    get:
+      tags: [Libraries]
+      summary: List all libraries
+      parameters:
+        - name: enabled
+          in: query
+          schema:
+            type: boolean
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [movies, series, anime, sports, music, documentaries, standup, general]
+      responses:
+        '200':
+          description: List of libraries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Library'
+
+    post:
+      tags: [Libraries]
+      summary: Create library
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLibraryRequest'
+      responses:
+        '200':
+          description: Library created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/libraries/{libraryId}:
+    get:
+      tags: [Libraries]
+      summary: Get library details
+      parameters:
+        - name: libraryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Library details
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Library'
+
+    put:
+      tags: [Libraries]
+      summary: Update library
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: libraryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLibraryRequest'
+      responses:
+        '200':
+          description: Library updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+    delete:
+      tags: [Libraries]
+      summary: Delete library
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: libraryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: deleteMedia
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Library deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/libraries/{libraryId}/scan:
+    post:
+      tags: [Libraries]
+      summary: Scan library for media
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: libraryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Scan completed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          filesScanned:
+                            type: integer
+                          filesAdded:
+                            type: integer
+                          duration:
+                            type: integer
+
+  /api/libraries/scan-all:
+    post:
+      tags: [Libraries]
+      summary: Scan all enabled libraries
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        '200':
+          description: All libraries scanned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/libraries/{libraryId}/stats:
+    get:
+      tags: [Libraries]
+      summary: Get library statistics
+      parameters:
+        - name: libraryId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Library stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  # === MEDIA ===
+  /api/media:
+    get:
+      tags: [Media]
+      summary: Search media files
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: libraryId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Media search results
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/MediaFile'
+
+  /api/media/series:
+    get:
+      tags: [Media]
+      summary: List all TV series
+      responses:
+        '200':
+          description: List of series
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: string
+
+  /api/media/series/{seriesName}:
+    get:
+      tags: [Media]
+      summary: Get series with seasons and episodes
+      parameters:
+        - name: seriesName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Series details
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          seriesName:
+                            type: string
+                          stats:
+                            type: object
+                          seasons:
+                            type: array
+
+  # === BUCKETS ===
+  /api/buckets:
+    get:
+      tags: [Buckets]
+      summary: List all buckets
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [global, channel_specific]
+      responses:
+        '200':
+          description: List of buckets
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/MediaBucket'
+
+    post:
+      tags: [Buckets]
+      summary: Create bucket
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBucketRequest'
+      responses:
+        '200':
+          description: Bucket created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/buckets/{bucketId}:
+    get:
+      tags: [Buckets]
+      summary: Get bucket details
+      parameters:
+        - name: bucketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Bucket details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+    put:
+      tags: [Buckets]
+      summary: Update bucket
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: bucketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '200':
+          description: Bucket updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+    delete:
+      tags: [Buckets]
+      summary: Delete bucket
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: bucketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Bucket deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/buckets/{bucketId}/media:
+    post:
+      tags: [Buckets]
+      summary: Add media to bucket
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: bucketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mediaFileIds:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+              required:
+                - mediaFileIds
+      responses:
+        '200':
+          description: Media added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/buckets/{bucketId}/channels/{channelId}:
+    post:
+      tags: [Buckets]
+      summary: Assign bucket to channel
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: bucketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                priority:
+                  type: integer
+              required:
+                - priority
+      responses:
+        '200':
+          description: Bucket assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+    delete:
+      tags: [Buckets]
+      summary: Remove bucket from channel
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: bucketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Bucket removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/buckets/{bucketId}/libraries:
+    post:
+      tags: [Buckets]
+      summary: Assign library to bucket
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: bucketId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                libraryFolderId:
+                  type: string
+                  format: uuid
+              required:
+                - libraryFolderId
+      responses:
+        '200':
+          description: Library assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  # === SCHEDULES ===
+  /api/schedules/channels/{channelId}/blocks:
+    get:
+      tags: [Schedules]
+      summary: List schedule blocks
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Schedule blocks
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ScheduleBlock'
+
+    post:
+      tags: [Schedules]
+      summary: Create schedule block
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScheduleBlockRequest'
+      responses:
+        '200':
+          description: Schedule block created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+  /api/schedules/channels/{channelId}/blocks/{blockId}:
+    get:
+      tags: [Schedules]
+      summary: Get schedule block
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: blockId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Schedule block
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+    put:
+      tags: [Schedules]
+      summary: Update schedule block
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: blockId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScheduleBlockRequest'
+      responses:
+        '200':
+          description: Schedule block updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'
+
+    delete:
+      tags: [Schedules]
+      summary: Delete schedule block
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: blockId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Schedule block deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponse'

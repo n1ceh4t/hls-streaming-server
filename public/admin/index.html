@@ -1,0 +1,3999 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HLS Streaming Server - Admin Panel</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --bg-hover: #475569;
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --radius: 0.5rem;
+            --radius-lg: 0.75rem;
+            --transition: all 0.2s ease;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        .container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            transition: width var(--transition);
+            flex-shrink: 0;
+        }
+
+        .sidebar.collapsed {
+            width: 64px;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .sidebar-header h1 {
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+        }
+
+        .sidebar.collapsed .sidebar-header h1 {
+            display: none;
+        }
+
+        .sidebar-toggle {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 8px;
+            border-radius: var(--radius);
+            transition: var(--transition);
+            font-size: 18px;
+        }
+
+        .sidebar-toggle:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .sidebar-nav {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: var(--radius);
+            margin-bottom: 4px;
+            transition: var(--transition);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .nav-item-icon {
+            width: 24px;
+            margin-right: 12px;
+            text-align: center;
+            font-size: 18px;
+        }
+
+        .sidebar.collapsed .nav-item-icon {
+            margin-right: 0;
+        }
+
+        .nav-item-text {
+            flex: 1;
+        }
+
+        .sidebar.collapsed .nav-item-text {
+            display: none;
+        }
+
+        .sidebar-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border);
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            border-radius: var(--radius);
+            background: var(--bg-tertiary);
+        }
+
+        .sidebar.collapsed .user-info {
+            justify-content: center;
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            margin-right: 12px;
+        }
+
+        .sidebar.collapsed .user-avatar {
+            margin-right: 0;
+        }
+
+        .user-details {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .sidebar.collapsed .user-details {
+            display: none;
+        }
+
+        .user-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .logout-btn {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: var(--transition);
+            width: 100%;
+            margin-top: 8px;
+        }
+
+        .logout-btn:hover {
+            background: #dc2626;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .content-header {
+            padding: 20px 24px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .content-header h2 {
+            color: var(--text-primary);
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .content-body {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        /* Login Screen */
+        .login-screen {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: var(--bg-primary);
+        }
+
+        .login-card {
+            background: var(--bg-secondary);
+            padding: 48px;
+            border-radius: var(--radius-lg);
+            width: 100%;
+            max-width: 420px;
+            border: 1px solid var(--border);
+        }
+
+        .login-card h1 {
+            color: var(--text-primary);
+            margin-bottom: 8px;
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .login-card p {
+            color: var(--text-muted);
+            margin-bottom: 32px;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--gray-700);
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 15px;
+            transition: var(--transition);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent);
+            background: var(--bg-secondary);
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn:disabled {
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 14px 16px;
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+            display: none;
+            font-size: 14px;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        /* Admin Panel */
+        .admin-panel {
+            display: none;
+            width: 100%;
+            height: 100vh;
+        }
+
+        .admin-panel.active {
+            display: flex;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            padding: 24px;
+            border-radius: var(--radius-lg);
+            margin-bottom: 24px;
+            border: 1px solid var(--border);
+        }
+
+        .card h2 {
+            color: var(--text-primary);
+            margin-bottom: 20px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            padding: 20px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+        }
+
+        .stat-card h3 {
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-bottom: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-secondary);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        table th,
+        table td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        table th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        table tr:last-child td {
+            border-bottom: none;
+        }
+
+        table tr:hover {
+            background: var(--bg-hover);
+        }
+
+        table td {
+            color: var(--text-secondary);
+        }
+
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-block;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-streaming {
+            background: var(--success);
+            color: white;
+        }
+
+        .status-idle {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+        }
+
+        .status-error {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 13px;
+            margin-right: 8px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            transition: var(--transition);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        /* Toggle Switch Styles */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 48px;
+            height: 24px;
+            margin-right: 12px;
+            vertical-align: middle;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--bg-tertiary);
+            transition: var(--transition);
+            border-radius: 24px;
+            border: 1px solid var(--border);
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 2px;
+            bottom: 2px;
+            background-color: var(--text-primary);
+            transition: var(--transition);
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+
+        .toggle-switch input:focus + .toggle-slider {
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+
+        .toggle-switch input:disabled + .toggle-slider {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .toggle-label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .toggle-label-text {
+            flex: 1;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: var(--text-muted);
+            font-size: 16px;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 15px;
+            transition: var(--transition);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: inherit;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            background: var(--bg-secondary);
+        }
+
+        .bucket-tab-btn {
+            flex: 1;
+            padding: 12px 20px;
+            background: var(--bg-tertiary);
+            border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            transition: var(--transition);
+        }
+
+        .bucket-tab-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .bucket-tab-btn.active {
+            background: var(--bg-secondary);
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        .bucket-tab-content {
+            display: none;
+        }
+
+        .bucket-tab-content.active {
+            display: block;
+        }
+
+        /* Stream Player */
+        .stream-player-container {
+            background: var(--bg-secondary);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .stream-selector {
+            margin-bottom: 20px;
+        }
+
+        .stream-selector select {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text-primary);
+            font-size: 15px;
+        }
+
+        .video-player {
+            width: 100%;
+            background: #000;
+            border-radius: var(--radius);
+            aspect-ratio: 16/9;
+        }
+
+        /* Modals */
+        .admin-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .admin-modal-content {
+            max-width: 900px;
+            margin: 50px auto;
+            background: var(--bg-secondary);
+            padding: 24px;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+        }
+
+        .admin-modal-header {
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .admin-modal-header h3 {
+            color: var(--text-primary);
+            font-size: 20px;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .admin-modal-body {
+            color: var(--text-secondary);
+        }
+
+        .admin-modal-footer {
+            margin-top: 24px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-secondary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--bg-hover);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Login Screen -->
+        <div id="loginScreen" class="login-screen">
+            <div class="login-card">
+                <h1>Admin Panel</h1>
+                <p id="setupMessage" style="display: none;">Create the first admin account</p>
+                <p id="loginMessage">Please log in to continue</p>
+                
+                <div id="error" class="error"></div>
+                
+                <form id="authForm">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" name="username" required autocomplete="username">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required autocomplete="current-password">
+                    </div>
+                    
+                    <div class="form-group" id="emailGroup" style="display: none;">
+                        <label for="email">Email (optional)</label>
+                        <input type="email" id="email" name="email" autocomplete="email">
+                    </div>
+                    
+                    <button type="submit" class="btn" id="submitBtn">Login</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Admin Panel -->
+        <div id="adminPanel" class="admin-panel">
+            <!-- Sidebar -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    <h1>HLS Admin</h1>
+                    <button class="sidebar-toggle" onclick="toggleSidebar()"></button>
+                </div>
+                <nav class="sidebar-nav">
+                    <div class="nav-item active" onclick="switchTab('dashboard')">
+                        <span class="nav-item-icon"></span>
+                        <span class="nav-item-text">Dashboard</span>
+                    </div>
+                    <div class="nav-item" onclick="switchTab('stream')">
+                        <span class="nav-item-icon"></span>
+                        <span class="nav-item-text">Stream Player</span>
+                    </div>
+                    <div class="nav-item" onclick="switchTab('channels')">
+                        <span class="nav-item-icon"></span>
+                        <span class="nav-item-text">Channels</span>
+                    </div>
+                    <div class="nav-item" onclick="switchTab('libraries')">
+                        <span class="nav-item-icon"></span>
+                        <span class="nav-item-text">Libraries</span>
+                    </div>
+                    <div class="nav-item" onclick="switchTab('buckets')">
+                        <span class="nav-item-icon"></span>
+                        <span class="nav-item-text">Buckets</span>
+                    </div>
+                    <div class="nav-item" onclick="switchTab('playlists')">
+                        <span class="nav-item-icon"></span>
+                        <span class="nav-item-text">Playlists</span>
+                    </div>
+                    <div class="nav-item" onclick="switchTab('epg')">
+                        <span class="nav-item-icon"></span>
+                        <span class="nav-item-text">EPG</span>
+                    </div>
+                </nav>
+                <div class="sidebar-footer">
+                    <div class="user-info">
+                        <div class="user-avatar" id="userAvatar">U</div>
+                        <div class="user-details">
+                            <div class="user-name" id="currentUser">User</div>
+                        </div>
+                    </div>
+                    <button class="logout-btn" onclick="logout()">Logout</button>
+                </div>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <div class="content-header">
+                    <h2 id="pageTitle">Dashboard</h2>
+                </div>
+                <div class="content-body">
+
+                    <!-- Dashboard Tab -->
+                    <div id="dashboardTab" class="tab-content active" style="display: block;"></div>
+
+                    <!-- Stream Player Tab -->
+                    <div id="streamTab" class="tab-content" style="display: none;"></div>
+
+                    <!-- Channels Tab -->
+                    <div id="channelsTab" class="tab-content" style="display: none;"></div>
+
+                    <!-- Libraries Tab -->
+                    <div id="librariesTab" class="tab-content" style="display: none;"></div>
+
+                    <!-- Buckets Tab -->
+                    <div id="bucketsTab" class="tab-content" style="display: none;"></div>
+
+                    <!-- Playlists Tab -->
+                    <div id="playlistsTab" class="tab-content" style="display: none;"></div>
+
+                    <!-- EPG Tab -->
+                    <div id="epgTab" class="tab-content" style="display: none;"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let currentUser = null;
+
+        // Check authentication on load
+        async function init() {
+            const setupRequired = await checkSetup();
+            if (setupRequired) {
+                document.getElementById('setupMessage').style.display = 'block';
+                document.getElementById('loginMessage').style.display = 'none';
+                document.getElementById('emailGroup').style.display = 'block';
+                document.getElementById('submitBtn').textContent = 'Create Admin Account';
+            }
+
+            // Check if already logged in
+            const me = await checkAuth();
+            if (me) {
+                showAdminPanel(me);
+            } else {
+                showLoginScreen();
+            }
+        }
+
+        async function checkSetup() {
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/setup-required`);
+                const data = await res.json();
+                return data.data.setupRequired;
+            } catch (error) {
+                console.error('Failed to check setup:', error);
+                return false;
+            }
+        }
+
+        async function checkAuth() {
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/me`);
+                if (res.ok) {
+                    const data = await res.json();
+                    return data.data;
+                }
+                return null;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function showLoginScreen() {
+            document.getElementById('loginScreen').style.display = 'flex';
+            document.getElementById('adminPanel').classList.remove('active');
+        }
+
+        function showAdminPanel(user) {
+            currentUser = user;
+            document.getElementById('loginScreen').style.display = 'none';
+            document.getElementById('adminPanel').classList.add('active');
+            document.getElementById('currentUser').textContent = user.username;
+            const avatar = document.getElementById('userAvatar');
+            if (avatar && user.username) {
+                avatar.textContent = user.username.charAt(0).toUpperCase();
+            }
+            loadDashboard();
+        }
+
+        document.getElementById('authForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const errorDiv = document.getElementById('error');
+            errorDiv.classList.remove('show');
+            errorDiv.textContent = '';
+
+            const formData = new FormData(e.target);
+            const username = formData.get('username');
+            const password = formData.get('password');
+            const email = formData.get('email');
+
+            const setupRequired = await checkSetup();
+            const endpoint = setupRequired ? '/api/auth/register' : '/api/auth/login';
+            const payload = setupRequired
+                ? { username, password, email: email || undefined }
+                : { username, password };
+
+            try {
+                const res = await fetch(`${API_BASE}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    credentials: 'include',
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    showAdminPanel(data.data.user);
+                } else {
+                    errorDiv.textContent = data.error?.message || 'Authentication failed';
+                    errorDiv.classList.add('show');
+                }
+            } catch (error) {
+                errorDiv.textContent = 'Network error. Please try again.';
+                errorDiv.classList.add('show');
+            }
+        });
+
+        async function logout() {
+            try {
+                await fetch(`${API_BASE}/api/auth/logout`, {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+                showLoginScreen();
+            } catch (error) {
+                console.error('Logout error:', error);
+                showLoginScreen();
+            }
+        }
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('collapsed');
+        }
+
+        // Tab content loaders
+        const tabLoaders = {
+            'dashboard': async () => {
+                const content = document.getElementById('dashboardTab');
+                if (!content.dataset.loaded) {
+                    content.innerHTML = await loadTabContent('dashboard');
+                    content.dataset.loaded = 'true';
+                }
+                loadDashboard();
+            },
+            'stream': async () => {
+                const content = document.getElementById('streamTab');
+                if (!content.dataset.loaded) {
+                    content.innerHTML = await loadTabContent('stream');
+                    content.dataset.loaded = 'true';
+                }
+                loadStreamChannels();
+            },
+            'channels': async () => {
+                const content = document.getElementById('channelsTab');
+                if (!content.dataset.loaded) {
+                    content.innerHTML = await loadTabContent('channels');
+                    content.dataset.loaded = 'true';
+                }
+                loadChannels();
+            },
+            'libraries': async () => {
+                const content = document.getElementById('librariesTab');
+                if (!content.dataset.loaded) {
+                    content.innerHTML = await loadTabContent('libraries');
+                    content.dataset.loaded = 'true';
+                }
+                loadLibraries();
+            },
+            'buckets': async () => {
+                const content = document.getElementById('bucketsTab');
+                if (!content.dataset.loaded) {
+                    content.innerHTML = await loadTabContent('buckets');
+                    content.dataset.loaded = 'true';
+                }
+                loadBuckets();
+            },
+            'playlists': async () => {
+                const content = document.getElementById('playlistsTab');
+                if (!content.dataset.loaded) {
+                    content.innerHTML = await loadTabContent('playlists');
+                    content.dataset.loaded = 'true';
+                }
+                loadPlaylists();
+            },
+            'epg': async () => {
+                const content = document.getElementById('epgTab');
+                if (!content.dataset.loaded) {
+                    content.innerHTML = await loadTabContent('epg');
+                    content.dataset.loaded = 'true';
+                }
+                loadEPG();
+            }
+        };
+
+        async function loadTabContent(tabName) {
+            try {
+                const response = await fetch(`${API_BASE}/admin/tabs/${tabName}.html`);
+                if (response.ok) {
+                    return await response.text();
+                }
+            } catch (error) {
+                console.error(`Failed to load tab ${tabName}:`, error);
+            }
+            // Fallback to inline content
+            return getInlineTabContent(tabName);
+        }
+
+        function getInlineTabContent(tabName) {
+            const contentBodies = {
+                'dashboard': `
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h3>Total Channels</h3>
+                            <div class="value" id="statChannels">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Active Streams</h3>
+                            <div class="value" id="statActive">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Total Media Files</h3>
+                            <div class="value" id="statMedia">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Viewers</h3>
+                            <div class="value" id="statViewers">-</div>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h2>Quick Actions</h2>
+                        <div style="margin-top: 15px;">
+                            <button class="btn btn-small" onclick="refreshData()">Refresh Data</button>
+                            <button class="btn btn-small btn-success" onclick="switchTab('channels')">Manage Channels</button>
+                            <button class="btn btn-small btn-success" onclick="switchTab('libraries')">Manage Libraries</button>
+                        </div>
+                    </div>
+                `,
+                'stream': `
+                    <div class="stream-player-container">
+                        <div class="stream-selector">
+                            <label>Select Channel:</label>
+                            <select id="streamChannelSelect" onchange="loadStream()">
+                                <option value="">Loading channels...</option>
+                            </select>
+                        </div>
+                        <video id="videoPlayer" class="video-player" controls></video>
+                    </div>
+                `,
+                'channels': `
+                    <div class="card">
+                        <h2>Channels</h2>
+                        <div style="margin-bottom: 20px;">
+                            <button class="btn btn-small btn-success" onclick="showAddChannelForm()">+ Create Channel</button>
+                            <button class="btn btn-small" onclick="loadChannels()">Refresh</button>
+                        </div>
+                        <div id="addChannelForm" style="display: none; background: var(--bg-tertiary); padding: 20px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <h3 style="margin-bottom: 15px; color: var(--text-primary);">Create New Channel</h3>
+                            <form id="newChannelForm">
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Channel Name:</label>
+                                    <input type="text" id="channelName" required placeholder="My Channel" style="width: 100%; padding: 8px;">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Slug (URL-friendly):</label>
+                                    <input type="text" id="channelSlug" required placeholder="my-channel" pattern="[a-z0-9-]+" style="width: 100%; padding: 8px;">
+                                    <small style="color: var(--text-muted);">Lowercase letters, numbers, and hyphens only</small>
+                                </div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                                    <div class="form-group">
+                                        <label>Video Bitrate:</label>
+                                        <select id="videoBitrate" style="width: 100%; padding: 8px;" onchange="updateVideoBitrateCustom(this.value)">
+                                            <option value="">Auto (from config)</option>
+                                            <option value="500000">500 kbps - Low quality (mobile)</option>
+                                            <option value="1000000">1 Mbps - Standard definition</option>
+                                            <option value="2500000">2.5 Mbps - HD quality</option>
+                                            <option value="4000000">4 Mbps - Full HD (1080p)</option>
+                                            <option value="6000000">6 Mbps - High quality (1080p)</option>
+                                            <option value="8000000">8 Mbps - Very high quality</option>
+                                            <option value="10000000">10 Mbps - Ultra high quality</option>
+                                            <option value="15000000">15 Mbps - Professional quality</option>
+                                            <option value="custom">Custom (enter value)</option>
+                                        </select>
+                                        <input type="number" id="videoBitrateCustom" min="100000" step="100000" placeholder="Custom bitrate (bps)" style="width: 100%; padding: 8px; margin-top: 5px; display: none;">
+                                        <small style="color: var(--text-muted); display: block; margin-top: 4px;">Select preset or choose custom</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Audio Bitrate:</label>
+                                        <select id="audioBitrate" style="width: 100%; padding: 8px;" onchange="updateAudioBitrateCustom(this.value)">
+                                            <option value="">Auto (from config)</option>
+                                            <option value="64000">64 kbps - Low quality</option>
+                                            <option value="96000">96 kbps - Standard quality</option>
+                                            <option value="128000">128 kbps - Good quality (recommended)</option>
+                                            <option value="192000">192 kbps - High quality</option>
+                                            <option value="256000">256 kbps - Very high quality</option>
+                                            <option value="320000">320 kbps - Maximum quality</option>
+                                            <option value="custom">Custom (enter value)</option>
+                                        </select>
+                                        <input type="number" id="audioBitrateCustom" min="64000" step="32000" placeholder="Custom bitrate (bps)" style="width: 100%; padding: 8px; margin-top: 5px; display: none;">
+                                        <small style="color: var(--text-muted); display: block; margin-top: 4px;">Select preset or choose custom</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Resolution:</label>
+                                        <select id="resolution" style="width: 100%; padding: 8px;">
+                                            <option value="">Auto (from config)</option>
+                                            <option value="3840x2160">3840x2160 (4K UHD) - Ultra high quality</option>
+                                            <option value="2560x1440">2560x1440 (1440p) - Quad HD</option>
+                                            <option value="1920x1080">1920x1080 (1080p) - Full HD (recommended)</option>
+                                            <option value="1280x720">1280x720 (720p) - HD</option>
+                                            <option value="854x480">854x480 (480p) - Standard definition</option>
+                                            <option value="640x360">640x360 (360p) - Low quality</option>
+                                        </select>
+                                        <small style="color: var(--text-muted); display: block; margin-top: 4px;">Select resolution preset</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Frame Rate (FPS):</label>
+                                        <select id="fps" style="width: 100%; padding: 8px;" onchange="updateFpsCustom(this.value)">
+                                            <option value="">Auto (from config)</option>
+                                            <option value="24">24 fps - Cinema standard</option>
+                                            <option value="25">25 fps - PAL standard</option>
+                                            <option value="30">30 fps - NTSC standard (recommended)</option>
+                                            <option value="50">50 fps - PAL high frame rate</option>
+                                            <option value="60">60 fps - High frame rate (smooth)</option>
+                                            <option value="custom">Custom (enter value)</option>
+                                        </select>
+                                        <input type="number" id="fpsCustom" min="1" max="120" placeholder="Custom FPS" style="width: 100%; padding: 8px; margin-top: 5px; display: none;">
+                                        <small style="color: var(--text-muted); display: block; margin-top: 4px;">Select preset or choose custom</small>
+                                    </div>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label class="toggle-label">
+                                        <span class="toggle-switch">
+                                            <input type="checkbox" id="channelAutoStart" checked>
+                                            <span class="toggle-slider"></span>
+                                        </span>
+                                        <span class="toggle-label-text">Auto-start channel</span>
+                                    </label>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label class="toggle-label">
+                                        <span class="toggle-switch">
+                                            <input type="checkbox" id="channelUseDynamicPlaylist">
+                                            <span class="toggle-slider"></span>
+                                        </span>
+                                        <span class="toggle-label-text">Enable dynamic playlist (schedule-based)</span>
+                                    </label>
+                                    <small style="color: var(--text-muted); display: block; margin-top: 4px; margin-left: 60px;">Use schedule blocks to determine which media to play</small>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label class="toggle-label">
+                                        <span class="toggle-switch">
+                                            <input type="checkbox" id="channelIncludeBumpers" checked>
+                                            <span class="toggle-slider"></span>
+                                        </span>
+                                        <span class="toggle-label-text">Include bumpers between files</span>
+                                    </label>
+                                    <small style="color: var(--text-muted); display: block; margin-top: 4px; margin-left: 60px;">Play bumper files between media content</small>
+                                </div>
+                                <div>
+                                    <button type="submit" class="btn btn-small btn-success">Create Channel</button>
+                                    <button type="button" class="btn btn-small" onclick="hideAddChannelForm()">Cancel</button>
+                                </div>
+                            </form>
+                        </div>
+                        <div id="channelsList" class="loading">Loading channels...</div>
+                    </div>
+                `,
+                'libraries': `
+                    <div class="card">
+                        <h2>Media Libraries</h2>
+                        <div style="margin-bottom: 20px;">
+                            <button class="btn btn-small btn-success" onclick="showAddLibraryForm()">+ Add Library Directory</button>
+                            <button class="btn btn-small" onclick="loadLibraries()">Refresh</button>
+                            <button class="btn btn-small btn-success" onclick="scanAllLibraries()">Scan All Libraries</button>
+                        </div>
+                        <div id="addLibraryForm" style="display: none; background: var(--bg-tertiary); padding: 20px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <h3 style="margin-bottom: 15px; color: var(--text-primary);">Add New Library Directory</h3>
+                            <form id="newLibraryForm">
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Name:</label>
+                                    <input type="text" id="libraryName" required style="width: 100%; padding: 8px;">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Directory Path:</label>
+                                    <input type="text" id="libraryPath" required placeholder="/path/to/media" style="width: 100%; padding: 8px;">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Category:</label>
+                                    <select id="libraryCategory" required style="width: 100%; padding: 8px;">
+                                        <option value="movies">Movies</option>
+                                        <option value="series">TV Series</option>
+                                        <option value="anime">Anime</option>
+                                        <option value="sports">Sports</option>
+                                        <option value="music">Music</option>
+                                        <option value="documentaries">Documentaries</option>
+                                        <option value="standup">Standup Comedy</option>
+                                        <option value="general">General</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label class="toggle-label">
+                                        <span class="toggle-switch">
+                                            <input type="checkbox" id="libraryRecursive" checked>
+                                            <span class="toggle-slider"></span>
+                                        </span>
+                                        <span class="toggle-label-text">Scan subdirectories recursively</span>
+                                    </label>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label class="toggle-label">
+                                        <span class="toggle-switch">
+                                            <input type="checkbox" id="libraryEnabled" checked>
+                                            <span class="toggle-slider"></span>
+                                        </span>
+                                        <span class="toggle-label-text">Enable library</span>
+                                    </label>
+                                </div>
+                                <div>
+                                    <button type="submit" class="btn btn-small btn-success">Create Library</button>
+                                    <button type="button" class="btn btn-small" onclick="hideAddLibraryForm()">Cancel</button>
+                                </div>
+                            </form>
+                        </div>
+                        <div id="librariesList" class="loading">Loading libraries...</div>
+                    </div>
+                `,
+                'buckets': `
+                    <div class="card">
+                        <h2>Media Buckets</h2>
+                        <div style="margin-bottom: 20px;">
+                            <button class="btn btn-small btn-success" onclick="showAddBucketForm()">+ Create Bucket</button>
+                            <button class="btn btn-small" onclick="loadBuckets()">Refresh</button>
+                        </div>
+                        <div id="addBucketForm" style="display: none; background: var(--bg-tertiary); padding: 20px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <h3 style="margin-bottom: 15px; color: var(--text-primary);">Create New Media Bucket</h3>
+                            <form id="newBucketForm">
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Bucket Name:</label>
+                                    <input type="text" id="bucketName" required placeholder="90s Sitcoms" style="width: 100%; padding: 8px;">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Bucket Type:</label>
+                                    <select id="bucketType" required style="width: 100%; padding: 8px;">
+                                        <option value="global">Global (available to all channels)</option>
+                                        <option value="channel_specific">Channel Specific</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Description (optional):</label>
+                                    <textarea id="bucketDescription" rows="3" placeholder="Collection of 90s sitcoms..." style="width: 100%; padding: 8px;"></textarea>
+                                </div>
+                                <div>
+                                    <button type="submit" class="btn btn-small btn-success">Create Bucket</button>
+                                    <button type="button" class="btn btn-small" onclick="hideAddBucketForm()">Cancel</button>
+                                </div>
+                            </form>
+                        </div>
+                        <div id="bucketsList" class="loading">Loading buckets...</div>
+                    </div>
+                `,
+                'playlists': `
+                    <div class="card">
+                        <h2>Playlist Management</h2>
+                        <p style="color: var(--text-secondary); margin-bottom: 20px;">
+                            Manage schedule blocks for channels. Schedule blocks define which buckets play at specific times.
+                        </p>
+                        <div style="margin-bottom: 20px;">
+                            <label style="display: block; margin-bottom: 8px;">Select Channel:</label>
+                            <select id="playlistChannelSelect" onchange="loadPlaylistBlocks()" style="width: 300px; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-primary);">
+                                <option value="">Loading channels...</option>
+                            </select>
+                        </div>
+                        <div id="playlistInfo" style="display: none; background: var(--bg-tertiary); padding: 15px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <h3 id="playlistChannelName" style="margin: 0 0 5px 0;"></h3>
+                                    <p id="playlistChannelStatus" style="margin: 0; color: var(--text-secondary); font-size: 14px;"></p>
+                                </div>
+                                <div>
+                                    <button class="btn btn-small btn-success" onclick="showAddBlockForm()">+ Add Block</button>
+                                    <button class="btn btn-small" onclick="loadPlaylistBlocks()">Refresh</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="addBlockForm" style="display: none; background: var(--bg-tertiary); padding: 20px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <h3 style="margin-bottom: 15px; color: var(--text-primary);">Add Schedule Block</h3>
+                            <form id="newBlockForm" onsubmit="saveBlock(event)">
+                                <input type="hidden" id="blockId" value="">
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Block Name:</label>
+                                    <input type="text" id="blockName" required placeholder="Morning Cartoons" style="width: 100%; padding: 8px;">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Days of Week:</label>
+                                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                        <label><input type="checkbox" name="dayOfWeek" value="0"> Sun</label>
+                                        <label><input type="checkbox" name="dayOfWeek" value="1"> Mon</label>
+                                        <label><input type="checkbox" name="dayOfWeek" value="2"> Tue</label>
+                                        <label><input type="checkbox" name="dayOfWeek" value="3"> Wed</label>
+                                        <label><input type="checkbox" name="dayOfWeek" value="4"> Thu</label>
+                                        <label><input type="checkbox" name="dayOfWeek" value="5"> Fri</label>
+                                        <label><input type="checkbox" name="dayOfWeek" value="6"> Sat</label>
+                                        <label><input type="checkbox" id="allDays" onchange="toggleAllDays()"> All Days</label>
+                                    </div>
+                                    <small style="color: var(--text-muted);">Leave all unchecked for every day</small>
+                                </div>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                                    <div class="form-group">
+                                        <label>Start Time:</label>
+                                        <input type="time" id="blockStartTime" required style="width: 100%; padding: 8px;">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>End Time:</label>
+                                        <input type="time" id="blockEndTime" required style="width: 100%; padding: 8px;">
+                                    </div>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Bucket:</label>
+                                    <div style="display: flex; gap: 10px; align-items: flex-start;">
+                                        <select id="blockBucketId" required style="flex: 1; padding: 8px;" onchange="updateManageBucketButton()">
+                                            <option value="">Loading buckets...</option>
+                                        </select>
+                                        <button type="button" class="btn btn-small" onclick="showCreateBucketInSchedulerModal()" style="white-space: nowrap;">+ Create Bucket</button>
+                                        <button type="button" id="manageBucketBtn" class="btn btn-small" onclick="manageSelectedBucketFromForm()" style="white-space: nowrap; display: none;">Manage Bucket</button>
+                                    </div>
+                                    <small style="color: var(--text-muted); display: block; margin-top: 4px;">Create a new bucket or select an existing one</small>
+                                    <div id="bucketCreateSuccess" style="display: none; margin-top: 8px; padding: 8px; background: var(--bg-tertiary); border-radius: var(--radius); border: 1px solid var(--accent); color: var(--accent); font-size: 13px;"></div>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Playback Mode:</label>
+                                    <select id="blockPlaybackMode" style="width: 100%; padding: 8px;">
+                                        <option value="sequential">Sequential</option>
+                                        <option value="shuffle">Shuffle</option>
+                                        <option value="random">Random</option>
+                                    </select>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label>Priority:</label>
+                                    <input type="number" id="blockPriority" value="1" min="1" style="width: 100%; padding: 8px;">
+                                    <small style="color: var(--text-muted);">Higher priority blocks take precedence when overlapping</small>
+                                </div>
+                                <div class="form-group" style="margin-bottom: 15px;">
+                                    <label class="toggle-label">
+                                        <span class="toggle-switch">
+                                            <input type="checkbox" id="blockEnabled" checked>
+                                            <span class="toggle-slider"></span>
+                                        </span>
+                                        <span class="toggle-label-text">Enabled</span>
+                                    </label>
+                                </div>
+                                <div>
+                                    <button type="submit" class="btn btn-small btn-success">Save Block</button>
+                                    <button type="button" class="btn btn-small" onclick="hideAddBlockForm()">Cancel</button>
+                                </div>
+                            </form>
+                        </div>
+                        <div id="playlistBlocksList" class="loading">Select a channel to view schedule blocks</div>
+                    </div>
+                `,
+                'epg': `
+                    <div class="card">
+                        <h2>EPG Management</h2>
+                        <div style="margin-top: 15px;">
+                            <button class="btn btn-small btn-success" onclick="refreshEPG()">Refresh EPG Cache</button>
+                            <div id="epgStats" style="margin-top: 20px;"></div>
+                        </div>
+                    </div>
+                `
+            };
+            return contentBodies[tabName] || '<div class="loading">Loading...</div>';
+        }
+
+        function switchTab(tabName) {
+            // Hide all tabs first - ensure they're hidden
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+                tab.style.display = 'none';
+            });
+            
+            // Update active nav item
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            // Show selected tab
+            const tabElement = document.getElementById(`${tabName}Tab`);
+            if (tabElement) {
+                tabElement.classList.add('active');
+                tabElement.style.display = 'block';
+                
+                // Setup form listeners for specific tabs when they're shown
+                if (tabName === 'channels') {
+                    // Setup channel form listener when channels tab is shown
+                    setTimeout(() => setupChannelFormListener(), 100);
+                } else if (tabName === 'libraries') {
+                    // Setup library form listener when libraries tab is shown
+                    setTimeout(() => setupLibraryFormListener(), 100);
+                }
+            }
+
+            // Update active nav item
+            const navItems = document.querySelectorAll('.nav-item');
+            navItems.forEach(item => {
+                if (item.getAttribute('onclick')?.includes(`'${tabName}'`)) {
+                    item.classList.add('active');
+                }
+            });
+
+            // Update page title
+            const titles = {
+                'dashboard': 'Dashboard',
+                'stream': 'Stream Player',
+                'channels': 'Channels',
+                'libraries': 'Libraries',
+                'buckets': 'Buckets',
+                'playlists': 'Playlists',
+                'epg': 'EPG'
+            };
+            document.getElementById('pageTitle').textContent = titles[tabName] || 'Dashboard';
+
+            // Load tab content dynamically
+            if (tabLoaders[tabName]) {
+                tabLoaders[tabName]();
+            }
+        }
+
+        async function loadStreamChannels() {
+            try {
+                const res = await fetch(`${API_BASE}/api/channels`);
+                const data = await res.json();
+                const select = document.getElementById('streamChannelSelect');
+                select.innerHTML = '<option value="">Select a channel...</option>';
+                
+                if (data.success && data.data) {
+                    const channels = Array.isArray(data.data) ? data.data : data.data.channels || [];
+                    channels.forEach(channel => {
+                        const option = document.createElement('option');
+                        option.value = channel.config.slug;
+                        option.textContent = channel.config.name;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load channels:', error);
+            }
+        }
+
+        let hlsPlayer = null;
+
+        function loadStream() {
+            const select = document.getElementById('streamChannelSelect');
+            const slug = select.value;
+            const video = document.getElementById('videoPlayer');
+            
+            // Clean up previous player
+            if (hlsPlayer) {
+                hlsPlayer.destroy();
+                hlsPlayer = null;
+            }
+            
+            if (slug) {
+                const streamUrl = `${API_BASE.replace('/api', '')}/stream/${slug}/playlist.m3u8`;
+                if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                    hlsPlayer = new Hls();
+                    hlsPlayer.loadSource(streamUrl);
+                    hlsPlayer.attachMedia(video);
+                    hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => {
+                        video.play().catch(err => console.error('Play error:', err));
+                    });
+                    hlsPlayer.on(Hls.Events.ERROR, (event, data) => {
+                        console.error('HLS error:', data);
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = streamUrl;
+                    video.play().catch(err => console.error('Play error:', err));
+                } else {
+                    alert('HLS playback not supported in this browser');
+                }
+            } else {
+                video.src = '';
+            }
+        }
+
+        async function loadDashboard() {
+            try {
+                const [channelsRes, mediaRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/channels`),
+                    fetch(`${API_BASE}/api/media?limit=1`),
+                ]);
+
+                const channelsData = await channelsRes.json();
+                const mediaData = await mediaRes.json();
+
+                const channels = channelsData.data || [];
+                const activeChannels = channels.filter(c => c.state === 'streaming');
+                const totalViewers = channels.reduce((sum, c) => sum + (c.viewerCount || 0), 0);
+
+                document.getElementById('statChannels').textContent = channels.length;
+                document.getElementById('statActive').textContent = activeChannels.length;
+                document.getElementById('statMedia').textContent = mediaData.data?.count || 0;
+                document.getElementById('statViewers').textContent = totalViewers;
+            } catch (error) {
+                console.error('Failed to load dashboard:', error);
+            }
+        }
+
+        async function loadChannels() {
+            const listDiv = document.getElementById('channelsList');
+            try {
+                const [channelsRes, bucketsRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/channels`),
+                    fetch(`${API_BASE}/api/buckets`),
+                ]);
+                
+                const channelsData = await channelsRes.json();
+                const bucketsData = await bucketsRes.json();
+                const channels = channelsData.data || [];
+                const allBuckets = bucketsData.data?.buckets || [];
+
+                if (channels.length === 0) {
+                    listDiv.innerHTML = '<p>No channels found. Click "Create Channel" to add one.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr><th>Name</th><th>Slug</th><th>State</th><th>Media</th><th>Buckets</th><th>Viewers</th><th>Actions</th></tr></thead><tbody>';
+                
+                for (const channel of channels) {
+                    // Get channel media count from buckets
+                    let mediaCount = 0;
+                    try {
+                        const countRes = await fetch(`${API_BASE}/api/channels/${channel.id}/media/count`);
+                        const countData = await countRes.json();
+                        if (countData.success) {
+                            mediaCount = countData.data?.count || 0;
+                        }
+                    } catch (e) {
+                        // Fallback to old method
+                        try {
+                            const mediaRes = await fetch(`${API_BASE}/api/channels/${channel.id}/media`);
+                            const mediaData = await mediaRes.json();
+                            mediaCount = mediaData.data?.length || 0;
+                        } catch (e2) {}
+                    }
+                    
+                    // Get channel buckets
+                    let channelBuckets = [];
+                    try {
+                        const bucketsRes = await fetch(`${API_BASE}/api/channels/${channel.id}/buckets`);
+                        const bucketsData = await bucketsRes.json();
+                        channelBuckets = bucketsData.data?.buckets || [];
+                    } catch (e) {}
+                    
+                    const stateClass = channel.state === 'streaming' ? 'status-streaming' : 
+                                     channel.state === 'error' ? 'status-error' : 'status-idle';
+                    const bucketsList = channelBuckets.length > 0 
+                        ? channelBuckets.map(b => b.name).join(', ') 
+                        : 'None';
+                    
+                    html += `
+                        <tr>
+                            <td><strong>${channel.config.name}</strong></td>
+                            <td>${channel.config.slug}</td>
+                            <td><span class="status-badge ${stateClass}">${channel.state}</span></td>
+                            <td>${mediaCount} files</td>
+                            <td title="${bucketsList}">${channelBuckets.length} bucket(s)</td>
+                            <td>${channel.viewerCount || 0}</td>
+                            <td>
+                                <button class="btn btn-small ${channel.state === 'streaming' ? 'btn-danger' : 'btn-success'}" 
+                                        onclick="toggleChannel('${channel.id}', '${channel.state}')">
+                                    ${channel.state === 'streaming' ? 'Stop' : 'Start'}
+                                </button>
+                                <button class="btn btn-small" onclick="manageChannel('${channel.id}', '${channel.config.name}')" title="Manage buckets and media">Manage</button>
+                                <button class="btn btn-small btn-danger" onclick="deleteChannel('${channel.id}', '${channel.config.name}')">Delete</button>
+                            </td>
+                        </tr>
+                    `;
+                }
+                html += '</tbody></table>';
+                listDiv.innerHTML = html;
+            } catch (error) {
+                listDiv.innerHTML = '<p class="error">Failed to load channels.</p>';
+                console.error('Failed to load channels:', error);
+            }
+        }
+
+        async function toggleChannel(channelId, currentState) {
+            try {
+                const action = currentState === 'streaming' ? 'stop' : 'start';
+                const res = await fetch(`${API_BASE}/api/channels/${channelId}/${action}`, {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+                if (res.ok) {
+                    loadChannels();
+                    loadDashboard();
+                }
+            } catch (error) {
+                console.error('Failed to toggle channel:', error);
+            }
+        }
+
+        async function loadLibraries() {
+            const listDiv = document.getElementById('librariesList');
+            try {
+                const res = await fetch(`${API_BASE}/api/libraries`);
+                const data = await res.json();
+                const libraries = data.data?.libraries || [];
+
+                if (libraries.length === 0) {
+                    listDiv.innerHTML = '<p>No libraries found. Click "Add Library Directory" to create one.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr><th>Name</th><th>Path</th><th>Category</th><th>Files</th><th>Last Scan</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+                
+                for (const lib of libraries) {
+                    // Get stats for each library
+                    let stats = { totalFiles: 0, lastScanAt: null };
+                    try {
+                        const statsRes = await fetch(`${API_BASE}/api/libraries/${lib.id}/stats`);
+                        const statsData = await statsRes.json();
+                        if (statsData.success) {
+                            stats = statsData.data;
+                        }
+                    } catch (e) {
+                        // Ignore stats errors
+                    }
+                    
+                    const lastScan = stats.lastScanAt ? new Date(stats.lastScanAt).toLocaleString() : 'Never';
+                    const recursiveBadge = lib.recursive ? '<span style="font-size: 10px; color: var(--text-muted);">(recursive)</span>' : '';
+                    
+                    html += `
+                        <tr>
+                            <td><strong>${lib.name}</strong> ${recursiveBadge}</td>
+                            <td style="font-family: monospace; font-size: 12px;">${lib.path}</td>
+                            <td>${lib.category}</td>
+                            <td>${stats.totalFiles}</td>
+                            <td>${lastScan}</td>
+                            <td><span class="status-badge ${lib.enabled ? 'status-streaming' : 'status-idle'}">${lib.enabled ? 'Enabled' : 'Disabled'}</span></td>
+                            <td>
+                                <button class="btn btn-small btn-success" onclick="scanLibrary('${lib.id}', '${lib.name}')" ${!lib.enabled ? 'disabled' : ''}>Scan</button>
+                                <button class="btn btn-small" onclick="toggleLibrary('${lib.id}', ${!lib.enabled})">${lib.enabled ? 'Disable' : 'Enable'}</button>
+                                <button class="btn btn-small btn-danger" onclick="deleteLibrary('${lib.id}', '${lib.name}')">Delete</button>
+                            </td>
+                        </tr>
+                    `;
+                }
+                html += '</tbody></table>';
+                listDiv.innerHTML = html;
+            } catch (error) {
+                listDiv.innerHTML = '<p class="error">Failed to load libraries.</p>';
+                console.error('Failed to load libraries:', error);
+            }
+        }
+
+        function showAddLibraryForm() {
+            document.getElementById('addLibraryForm').style.display = 'block';
+            document.getElementById('libraryName').focus();
+        }
+
+        function hideAddLibraryForm() {
+            document.getElementById('addLibraryForm').style.display = 'none';
+            document.getElementById('newLibraryForm').reset();
+        }
+
+        async function scanLibrary(libraryId, libraryName) {
+            if (!confirm(`Scan library "${libraryName}"? This may take a while for large directories.`)) {
+                return;
+            }
+
+            const listDiv = document.getElementById('librariesList');
+            const originalHtml = listDiv.innerHTML;
+            listDiv.innerHTML = `<p>Scanning "${libraryName}"... Please wait.</p>`;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/libraries/${libraryId}/scan`, {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    alert(`Scan complete!\n\nFiles scanned: ${data.data.filesScanned}\nFiles added: ${data.data.filesAdded}\nDuration: ${(data.data.durationMs / 1000).toFixed(1)}s`);
+                    loadLibraries();
+                } else {
+                    alert(`Error: ${data.error?.message || 'Scan failed'}`);
+                    listDiv.innerHTML = originalHtml;
+                }
+            } catch (error) {
+                alert('Network error during scan. Please try again.');
+                listDiv.innerHTML = originalHtml;
+                console.error('Failed to scan library:', error);
+            }
+        }
+
+        async function scanAllLibraries() {
+            if (!confirm('Scan all enabled libraries? This may take a while.')) {
+                return;
+            }
+
+            const listDiv = document.getElementById('librariesList');
+            const originalHtml = listDiv.innerHTML;
+            listDiv.innerHTML = '<p>Scanning all libraries... Please wait.</p>';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/libraries/scan-all`, {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+
+                const data = await res.json();
+
+                if (res.ok) {
+                    alert(`Scan complete!\n\nLibraries scanned: ${data.data.librariesScanned}\nTotal files scanned: ${data.data.totalFilesScanned}\nTotal files added: ${data.data.totalFilesAdded}\nTotal duration: ${(data.data.totalDurationMs / 1000).toFixed(1)}s`);
+                    loadLibraries();
+                } else {
+                    alert(`Error: ${data.error?.message || 'Scan failed'}`);
+                    listDiv.innerHTML = originalHtml;
+                }
+            } catch (error) {
+                alert('Network error during scan. Please try again.');
+                listDiv.innerHTML = originalHtml;
+                console.error('Failed to scan all libraries:', error);
+            }
+        }
+
+        async function toggleLibrary(libraryId, enable) {
+            try {
+                const res = await fetch(`${API_BASE}/api/libraries/${libraryId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ enabled: enable }),
+                });
+
+                if (res.ok) {
+                    loadLibraries();
+                } else {
+                    const data = await res.json();
+                    alert(`Error: ${data.error?.message || 'Failed to update library'}`);
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to toggle library:', error);
+            }
+        }
+
+        async function deleteLibrary(libraryId, libraryName) {
+            if (!confirm(`Delete library "${libraryName}"? This will not delete the media files, only the library entry.`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/libraries/${libraryId}`, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                });
+
+                if (res.ok) {
+                    alert(`Library "${libraryName}" deleted successfully.`);
+                    loadLibraries();
+                } else {
+                    const data = await res.json();
+                    alert(`Error: ${data.error?.message || 'Failed to delete library'}`);
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to delete library:', error);
+            }
+        }
+
+        async function loadBuckets() {
+            const listDiv = document.getElementById('bucketsList');
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets`);
+                const data = await res.json();
+                const buckets = data.data?.buckets || [];
+
+                if (buckets.length === 0) {
+                    listDiv.innerHTML = '<p>No buckets found. Click "Create Bucket" to add one.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr><th>Name</th><th>Type</th><th>Media Files</th><th>Channels</th><th>Description</th><th>Actions</th></tr></thead><tbody>';
+                
+                for (const bucket of buckets) {
+                    // Get bucket stats
+                    let mediaCount = 0;
+                    let channelCount = 0;
+                    try {
+                        const statsRes = await fetch(`${API_BASE}/api/buckets/${bucket.id}/stats`);
+                        const statsData = await statsRes.json();
+                        if (statsData.success) {
+                            mediaCount = statsData.data?.totalMedia || 0;
+                            channelCount = statsData.data?.channelsUsing || 0;
+                        }
+                    } catch (e) {
+                        console.error('Failed to load bucket stats:', e);
+                    }
+                    
+                    html += `
+                        <tr>
+                            <td><strong>${bucket.name}</strong></td>
+                            <td>${bucket.bucketType}</td>
+                            <td>${mediaCount} ${mediaCount === 0 ? '<span style="color: var(--text-muted); font-size: 0.85em;">(add media)</span>' : ''}</td>
+                            <td>${channelCount}</td>
+                            <td>${bucket.description || '-'}</td>
+                            <td>
+                                <button class="btn btn-small" onclick="manageBucket('${bucket.id}', '${bucket.name}')">Manage</button>
+                                <button class="btn btn-small btn-danger" onclick="deleteBucket('${bucket.id}', '${bucket.name}')">Delete</button>
+                            </td>
+                        </tr>
+                    `;
+                }
+                html += '</tbody></table>';
+                listDiv.innerHTML = html;
+            } catch (error) {
+                listDiv.innerHTML = '<p class="error">Failed to load buckets.</p>';
+                console.error('Failed to load buckets:', error);
+            }
+        }
+
+        // ===== Series Management Functions =====
+
+        let allSeriesData = [];
+
+        async function loadSeries() {
+            const listDiv = document.getElementById('seriesList');
+            try {
+                const res = await fetch(`${API_BASE}/api/media/series`);
+                const data = await res.json();
+                allSeriesData = data.data?.series || [];
+
+                if (allSeriesData.length === 0) {
+                    listDiv.innerHTML = '<p>No series found. Scan your libraries to add media files.</p>';
+                    return;
+                }
+
+                displaySeries(allSeriesData);
+            } catch (error) {
+                listDiv.innerHTML = '<p class="error">Failed to load series.</p>';
+                console.error('Failed to load series:', error);
+            }
+        }
+
+        function displaySeries(series) {
+            const listDiv = document.getElementById('seriesList');
+            if (series.length === 0) {
+                listDiv.innerHTML = '<p>No series match your search.</p>';
+                return;
+            }
+
+            let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px;">';
+            
+            series.forEach(seriesName => {
+                html += `
+                    <div class="card" style="cursor: pointer; transition: transform 0.2s;" 
+                         onclick="viewSeries('${encodeURIComponent(seriesName)}')"
+                         onmouseover="this.style.transform='scale(1.02)'"
+                         onmouseout="this.style.transform='scale(1)'">
+                        <h3 style="margin: 0 0 10px 0;">${seriesName}</h3>
+                        <p style="color: var(--text-muted); margin: 0;">Click to view seasons and episodes</p>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            listDiv.innerHTML = html;
+        }
+
+        function filterSeries(searchTerm) {
+            const filtered = allSeriesData.filter(series => 
+                series.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+            displaySeries(filtered);
+        }
+
+        async function viewSeries(seriesName) {
+            try {
+                const res = await fetch(`${API_BASE}/api/media/series/${seriesName}`);
+                const data = await res.json();
+                
+                if (!data.success) {
+                    alert('Failed to load series details');
+                    return;
+                }
+
+                const series = data.data;
+                let html = `
+                    <div style="margin-bottom: 20px;">
+                        <button class="btn btn-small" onclick="closeModal(this); loadSeries();">? Back to Series</button>
+                    </div>
+                    <h2 style="color: var(--text-primary); margin-bottom: 20px;">${series.seriesName}</h2>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px;">
+                            <div class="stat-card">
+                                <h3>Total Episodes</h3>
+                                <div class="value">${series.stats.totalEpisodes}</div>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Seasons</h3>
+                                <div class="value">${series.stats.totalSeasons}</div>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Total Duration</h3>
+                                <div class="value">${formatDuration(series.stats.totalDuration)}</div>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Total Size</h3>
+                                <div class="value">${formatFileSize(series.stats.totalFileSize)}</div>
+                            </div>
+                        </div>
+                `;
+
+                series.seasons.forEach(seasonData => {
+                    const seasonLabel = seasonData.season === null ? 'Unknown Season' : `Season ${seasonData.season}`;
+                    html += `
+                        <div style="margin-bottom: 30px; border: 1px solid var(--border); border-radius: var(--radius); padding: 15px; background: var(--bg-tertiary);">
+                            <h3 style="margin: 0 0 15px 0; color: var(--text-primary);">${seasonLabel} (${seasonData.episodeCount} episodes)</h3>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">
+                    `;
+                    
+                    seasonData.episodes.forEach(episode => {
+                        const epLabel = episode.episode !== null && episode.episode !== undefined 
+                            ? `E${String(episode.episode).padStart(2, '0')}` 
+                            : '';
+                        const title = episode.title || episode.filename;
+                        html += `
+                            <div style="padding: 10px; background: var(--bg-secondary); border-radius: var(--radius); border: 1px solid var(--border);">
+                                <div style="font-weight: 500; margin-bottom: 5px; color: var(--text-primary);">${epLabel} ${title}</div>
+                                <div style="font-size: 0.85em; color: var(--text-muted);">
+                                    ${formatDuration(episode.duration)} ? ${formatFileSize(episode.fileSize)}
+                                </div>
+                                <div style="font-size: 0.75em; color: var(--text-muted); margin-top: 5px; word-break: break-all;">
+                                    ${episode.filename}
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                });
+
+                html += '</div>';
+
+                const modal = document.createElement('div');
+                modal.className = 'admin-modal';
+                modal.innerHTML = `
+                    <div class="admin-modal-content">
+                        <div class="admin-modal-body">
+                            ${html}
+                        </div>
+                        <div class="admin-modal-footer">
+                            <button class="btn btn-small" onclick="closeModal(this)">Close</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                // Close on background click
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        modal.remove();
+                    }
+                });
+            } catch (error) {
+                alert('Failed to load series details');
+                console.error('Failed to view series:', error);
+            }
+        }
+
+        function formatDuration(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            if (hours > 0) {
+                return `${hours}h ${minutes}m`;
+            }
+            return `${minutes}m`;
+        }
+
+        function formatFileSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let size = bytes;
+            let unitIndex = 0;
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex++;
+            }
+            return `${size.toFixed(2)} ${units[unitIndex]}`;
+        }
+
+        async function loadEPG() {
+            try {
+                const res = await fetch(`${API_BASE}/api/epg/stats`);
+                const data = await res.json();
+                const stats = data.data || {};
+
+                document.getElementById('epgStats').innerHTML = `
+                    <div class="stat-card">
+                        <h3>EPG Cache Status</h3>
+                        <p>Channels cached: ${stats.channelCount || 0}</p>
+                        <p>Last generated: ${stats.lastGenerated || 'Never'}</p>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('epgStats').innerHTML = '<p class="error">Failed to load EPG stats.</p>';
+            }
+        }
+
+        async function refreshEPG() {
+            try {
+                const res = await fetch(`${API_BASE}/api/epg/refresh`, {
+                    method: 'POST',
+                    credentials: 'include',
+                });
+                if (res.ok) {
+                    alert('EPG cache refreshed!');
+                    loadEPG();
+                }
+            } catch (error) {
+                alert('Failed to refresh EPG cache.');
+            }
+        }
+
+        function refreshData() {
+            loadDashboard();
+            if (document.getElementById('channelsTab').classList.contains('active')) {
+                loadChannels();
+            }
+        }
+
+        // ===== Channel Management Functions =====
+        
+        // Auto-generate slug from channel name (only set up once)
+        let slugAutoGenSetup = false;
+        function setupSlugAutoGeneration() {
+            if (slugAutoGenSetup) return;
+            slugAutoGenSetup = true;
+            
+            const nameInput = document.getElementById('channelName');
+            const slugInput = document.getElementById('channelSlug');
+            
+            if (!nameInput || !slugInput) return;
+            
+            nameInput.addEventListener('input', function() {
+                if (!slugInput.value || slugInput.dataset.autoGenerated === 'true') {
+                    const slug = nameInput.value
+                        .toLowerCase()
+                        .trim()
+                        .replace(/[^a-z0-9\s-]/g, '') // Remove special chars
+                        .replace(/\s+/g, '-') // Replace spaces with hyphens
+                        .replace(/-+/g, '-') // Replace multiple hyphens with single
+                        .replace(/^-|-$/g, ''); // Remove leading/trailing hyphens
+                    slugInput.value = slug;
+                    slugInput.dataset.autoGenerated = 'true';
+                }
+            });
+            
+            slugInput.addEventListener('input', function() {
+                // If user manually edits slug, stop auto-generation
+                slugInput.dataset.autoGenerated = 'false';
+            });
+        }
+
+        function showAddChannelForm() {
+            document.getElementById('addChannelForm').style.display = 'block';
+            document.getElementById('newChannelForm').reset();
+            setupSlugAutoGeneration();
+            // Reset auto-generation flag
+            const slugInput = document.getElementById('channelSlug');
+            if (slugInput) {
+                slugInput.dataset.autoGenerated = 'true';
+            }
+            // Setup form listener when form is shown
+            setupChannelFormListener();
+        }
+
+        function hideAddChannelForm() {
+            document.getElementById('addChannelForm').style.display = 'none';
+        }
+
+        function updateVideoBitrateCustom(value) {
+            const customInput = document.getElementById('videoBitrateCustom');
+            if (value === 'custom') {
+                customInput.style.display = 'block';
+                customInput.value = '';
+            } else {
+                customInput.style.display = 'none';
+                customInput.value = '';
+            }
+        }
+
+        function updateAudioBitrateCustom(value) {
+            const customInput = document.getElementById('audioBitrateCustom');
+            if (value === 'custom') {
+                customInput.style.display = 'block';
+                customInput.value = '';
+            } else {
+                customInput.style.display = 'none';
+                customInput.value = '';
+            }
+        }
+
+        function updateFpsCustom(value) {
+            const customInput = document.getElementById('fpsCustom');
+            if (value === 'custom') {
+                customInput.style.display = 'block';
+                customInput.value = '';
+            } else {
+                customInput.style.display = 'none';
+                customInput.value = '';
+            }
+        }
+
+        // Use event delegation or attach listener when form is shown
+        function setupChannelFormListener() {
+            const form = document.getElementById('newChannelForm');
+            if (!form) return;
+            
+            // Remove any existing listener to avoid duplicates
+            const newForm = form.cloneNode(true);
+            form.parentNode?.replaceChild(newForm, form);
+            
+            document.getElementById('newChannelForm')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                try {
+                    // Get values from dropdowns or custom inputs
+                    const videoBitrateSelect = document.getElementById('videoBitrate');
+                    const videoBitrateCustom = document.getElementById('videoBitrateCustom');
+                    const videoBitrateValue = videoBitrateSelect && videoBitrateSelect.value === 'custom' 
+                        ? (videoBitrateCustom && videoBitrateCustom.value ? parseInt(videoBitrateCustom.value) : undefined)
+                        : (videoBitrateSelect && videoBitrateSelect.value ? parseInt(videoBitrateSelect.value) : undefined);
+
+                    const audioBitrateSelect = document.getElementById('audioBitrate');
+                    const audioBitrateCustom = document.getElementById('audioBitrateCustom');
+                    const audioBitrateValue = audioBitrateSelect && audioBitrateSelect.value === 'custom'
+                        ? (audioBitrateCustom && audioBitrateCustom.value ? parseInt(audioBitrateCustom.value) : undefined)
+                        : (audioBitrateSelect && audioBitrateSelect.value ? parseInt(audioBitrateSelect.value) : undefined);
+
+                    const fpsSelect = document.getElementById('fps');
+                    const fpsCustom = document.getElementById('fpsCustom');
+                    const fpsValue = fpsSelect && fpsSelect.value === 'custom'
+                        ? (fpsCustom && fpsCustom.value ? parseInt(fpsCustom.value) : undefined)
+                        : (fpsSelect && fpsSelect.value ? parseInt(fpsSelect.value) : undefined);
+
+                    const channelName = document.getElementById('channelName');
+                    const channelSlug = document.getElementById('channelSlug');
+                    const resolution = document.getElementById('resolution');
+                    const channelAutoStart = document.getElementById('channelAutoStart');
+                    const channelUseDynamicPlaylist = document.getElementById('channelUseDynamicPlaylist');
+                    const channelIncludeBumpers = document.getElementById('channelIncludeBumpers');
+
+                    if (!channelName || !channelSlug) {
+                        alert('Channel name and slug are required');
+                        return;
+                    }
+
+                    const res = await fetch(`${API_BASE}/api/channels`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            name: channelName.value,
+                            slug: channelSlug.value,
+                            videoBitrate: videoBitrateValue,
+                            audioBitrate: audioBitrateValue,
+                            resolution: resolution && resolution.value ? resolution.value : undefined,
+                            fps: fpsValue,
+                            autoStart: channelAutoStart ? channelAutoStart.checked : false,
+                            useDynamicPlaylist: channelUseDynamicPlaylist ? channelUseDynamicPlaylist.checked : false,
+                            includeBumpers: channelIncludeBumpers ? channelIncludeBumpers.checked : true,
+                        }),
+                    });
+
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        alert('Channel created successfully!');
+                        hideAddChannelForm();
+                        loadChannels();
+                    } else {
+                        // Show detailed validation errors
+                        if (data.error?.code === 'VALIDATION_ERROR' && Array.isArray(data.error?.details)) {
+                            const errors = data.error.details.map(e => `${e.path.join('.')}: ${e.message}`).join('\n');
+                            alert(`Validation failed:\n${errors}`);
+                        } else {
+                            alert(data.error?.message || 'Failed to create channel');
+                        }
+                    }
+                } catch (error) {
+                    alert('Network error. Please try again.');
+                    console.error('Failed to create channel:', error);
+                }
+            });
+        }
+
+        function setupLibraryFormListener() {
+            const form = document.getElementById('newLibraryForm');
+            if (!form) {
+                console.warn('Library form not found in DOM');
+                return;
+            }
+            
+            // Remove any existing listener to avoid duplicates
+            const newForm = form.cloneNode(true);
+            form.parentNode?.replaceChild(newForm, form);
+            
+            document.getElementById('newLibraryForm')?.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const name = document.getElementById('libraryName')?.value;
+                const path = document.getElementById('libraryPath')?.value;
+                const category = document.getElementById('libraryCategory')?.value;
+                const recursive = document.getElementById('libraryRecursive')?.checked;
+                const enabled = document.getElementById('libraryEnabled')?.checked;
+
+                if (!name || !path || !category) {
+                    alert('Name, path, and category are required');
+                    return;
+                }
+
+                try {
+                    console.log('Creating library:', { name, path, category, recursive, enabled });
+                    
+                    const res = await fetch(`${API_BASE}/api/libraries`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ name, path, category, recursive, enabled }),
+                    });
+
+                    console.log('Library creation response:', { status: res.status, statusText: res.statusText, ok: res.ok });
+                    
+                    const data = await res.json();
+                    console.log('Library creation data:', data);
+
+                    if (res.ok) {
+                        alert(`Library "${name}" created successfully!`);
+                        hideAddLibraryForm();
+                        loadLibraries();
+                        
+                        // Auto-scan the new library if enabled
+                        if (enabled && data.data?.library?.id) {
+                            setTimeout(() => {
+                                scanLibrary(data.data.library.id, name);
+                            }, 500);
+                        }
+                    } else {
+                        let errorMessage = 'Failed to create library';
+                        if (data.error) {
+                            if (data.error.code === 'VALIDATION_ERROR') {
+                                errorMessage = data.error.message || 'Validation error';
+                            } else if (data.error.code === 'AUTHENTICATION_ERROR') {
+                                errorMessage = 'Authentication required. Please log in.';
+                            } else {
+                                errorMessage = data.error.message || errorMessage;
+                            }
+                        }
+                        alert(`Error: ${errorMessage}`);
+                        console.error('Failed to create library:', { status: res.status, statusText: res.statusText, data });
+                    }
+                } catch (error) {
+                    alert('Network error. Please try again.');
+                    console.error('Failed to create library:', error);
+                }
+            });
+        }
+
+        async function deleteChannel(channelId, channelName) {
+            if (!confirm(`Are you sure you want to delete "${channelName}"? This cannot be undone.`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/channels/${channelId}`, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Channel deleted successfully!');
+                    loadChannels();
+                } else {
+                    alert(data.error?.message || 'Failed to delete channel');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to delete channel:', error);
+            }
+        }
+
+        async function manageChannel(channelId, channelName) {
+            // Get channel buckets and available buckets
+            try {
+                const [channelRes, channelBucketsRes, allBucketsRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/channels/${channelId}`),
+                    fetch(`${API_BASE}/api/channels/${channelId}/buckets`),
+                    fetch(`${API_BASE}/api/buckets`),
+                ]);
+
+                const channelData = await channelRes.json();
+                const channel = channelData.data;
+                const channelBuckets = await channelBucketsRes.json();
+                const allBuckets = await allBucketsRes.json();
+
+                const assignedBucketIds = new Set((channelBuckets.data?.buckets || []).map(b => b.id));
+
+                let html = `
+                    <div class="admin-modal-header">
+                        <h3>Manage Channel: ${channelName}</h3>
+                    </div>
+                    <div style="margin-bottom: 30px;">
+                        <h4 style="color: var(--text-primary); margin-bottom: 10px;">Channel Settings</h4>
+                        <div style="background: var(--bg-tertiary); padding: 15px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label class="toggle-label">
+                                    <span class="toggle-switch">
+                                        <input type="checkbox" id="manageChannelUseDynamicPlaylist" ${channel.config.useDynamicPlaylist ? 'checked' : ''}>
+                                        <span class="toggle-slider"></span>
+                                    </span>
+                                    <span class="toggle-label-text">Enable dynamic playlist (schedule-based)</span>
+                                </label>
+                                <small style="color: var(--text-muted); display: block; margin-top: 4px; margin-left: 60px;">Use schedule blocks to determine which media to play</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label class="toggle-label">
+                                    <span class="toggle-switch">
+                                        <input type="checkbox" id="manageChannelIncludeBumpers" ${channel.config.includeBumpers !== false ? 'checked' : ''}>
+                                        <span class="toggle-slider"></span>
+                                    </span>
+                                    <span class="toggle-label-text">Include bumpers between files</span>
+                                </label>
+                                <small style="color: var(--text-muted); display: block; margin-top: 4px; margin-left: 60px;">Play bumper files between media content</small>
+                            </div>
+                            <button class="btn btn-small btn-success" onclick="updateChannelSettings('${channelId}')">Save Settings</button>
+                        </div>
+                `;
+                
+                // Only show bucket assignment section if dynamic playlist is NOT enabled
+                if (!channel.config.useDynamicPlaylist) {
+                    html += `
+                        <h4 style="color: var(--text-primary); margin-bottom: 10px;">Assign Buckets</h4>
+                        <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 10px;">
+                            Channels get media from buckets. Select which buckets this channel should use.
+                        </p>
+                        <div style="margin-bottom: 15px;">
+                            <select id="availableBucketsSelect" style="width: 100%; padding: 8px; margin-bottom: 10px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius);">
+                                <option value="">Select a bucket to add...</option>
+                    `;
+                    
+                    // Show only buckets that aren't already assigned
+                    (allBuckets.data?.buckets || []).forEach(bucket => {
+                        if (!assignedBucketIds.has(bucket.id)) {
+                            html += `<option value="${bucket.id}">${bucket.name} (${bucket.bucketType})</option>`;
+                        }
+                    });
+
+                    html += `
+                                </select>
+                                <button class="btn btn-small btn-success" onclick="addBucketToChannel('${channelId}')">Add Bucket</button>
+                                <button class="btn btn-small" onclick="showCreateBucketInChannelModal('${channelId}')" style="margin-left: 10px;">+ Create New Bucket</button>
+                            </div>
+                            
+                            <div style="margin-top: 20px;">
+                                <h5 style="color: var(--text-primary); margin-bottom: 10px;">Current Buckets:</h5>
+                                <div id="assignedBucketsList" style="min-height: 100px; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; background: var(--bg-tertiary);">
+                    `;
+
+                    if ((channelBuckets.data?.buckets || []).length === 0) {
+                        html += '<p style="color: var(--text-muted); text-align: center; padding: 20px;">No buckets assigned. Add buckets above.</p>';
+                    } else {
+                        (channelBuckets.data?.buckets || []).forEach(bucket => {
+                            html += `
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin-bottom: 5px; background: var(--bg-secondary); border-radius: var(--radius); border: 1px solid var(--border);">
+                                    <span><strong style="color: var(--text-primary);">${bucket.name}</strong> <span style="color: var(--text-muted);">(${bucket.bucketType})</span></span>
+                                    <button class="btn btn-small btn-danger" onclick="removeBucketFromChannelInModal('${channelId}', '${bucket.id}', '${bucket.name}')">Remove</button>
+                                </div>
+                            `;
+                        });
+                    }
+
+                    html += `
+                                </div>
+                            </div>
+                    `;
+                } else {
+                    html += `
+                        <div style="background: var(--bg-tertiary); padding: 15px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <p style="color: var(--text-secondary); margin: 0;">
+                                <strong>Note:</strong> With dynamic playlist enabled, buckets are assigned through schedule blocks in the Schedule Generator tab. 
+                                Direct bucket assignment is not used when schedule blocks are active.
+                            </p>
+                        </div>
+                    `;
+                }
+                
+                html += `
+                        </div>
+                `;
+
+                // Show modal or replace content
+                const modal = document.createElement('div');
+                modal.className = 'admin-modal';
+                modal.innerHTML = `
+                    <div class="admin-modal-content">
+                        <div class="admin-modal-body">
+                            ${html}
+                        </div>
+                        <div class="admin-modal-footer">
+                            <button class="btn btn-small" onclick="closeModal(this)">Close</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                // Close on background click
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        modal.remove();
+                    }
+                });
+            } catch (error) {
+                alert('Failed to load channel management data');
+                console.error('Failed to manage channel:', error);
+            }
+        }
+
+        async function showCreateBucketInChannelModal(channelId) {
+            const modal = document.createElement('div');
+            modal.className = 'admin-modal';
+            modal.innerHTML = `
+                <div class="admin-modal-content" style="max-width: 500px;">
+                    <div class="admin-modal-header">
+                        <h3>Create New Bucket</h3>
+                    </div>
+                    <div class="admin-modal-body">
+                    <form id="createBucketInChannelForm">
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label>Bucket Name:</label>
+                            <input type="text" id="newBucketName" required placeholder="90s Sitcoms" style="width: 100%; padding: 8px;">
+                        </div>
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label>Bucket Type:</label>
+                            <select id="newBucketType" required style="width: 100%; padding: 8px;">
+                                <option value="global">Global (available to all channels)</option>
+                                <option value="channel_specific">Channel Specific</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label>Description (optional):</label>
+                            <textarea id="newBucketDescription" rows="3" placeholder="Collection of 90s sitcoms..." style="width: 100%; padding: 8px;"></textarea>
+                        </div>
+                        <div>
+                            <button type="submit" class="btn btn-small btn-success">Create & Add to Channel</button>
+                            <button type="button" class="btn btn-small" onclick="closeModal(this)">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+            
+            document.getElementById('createBucketInChannelForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                try {
+                    const res = await fetch(`${API_BASE}/api/buckets`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            name: document.getElementById('newBucketName').value,
+                            bucketType: document.getElementById('newBucketType').value,
+                            description: document.getElementById('newBucketDescription').value || undefined,
+                        }),
+                    });
+
+                    const data = await res.json();
+                    if (res.ok) {
+                        const bucketId = data.data?.bucket?.id;
+                        // Automatically add to channel
+                        await fetch(`${API_BASE}/api/buckets/${bucketId}/channels/${channelId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({ priority: 1 }),
+                        });
+                        
+                        closeModal(modal.querySelector('.btn'));
+                        // Refresh the channel modal
+                        const channelBucketsRes = await fetch(`${API_BASE}/api/channels/${channelId}/buckets`);
+                        const channelBuckets = await channelBucketsRes.json();
+                        const buckets = channelBuckets.data?.buckets || [];
+
+                        // Update the assigned buckets list
+                        const listDiv = document.getElementById('assignedBucketsList');
+                        if (buckets.length === 0) {
+                            listDiv.innerHTML = '<p style="color: var(--text-muted); text-align: center; padding: 20px;">No buckets assigned. Add buckets above.</p>';
+                        } else {
+                            let html = '';
+                            buckets.forEach(bucket => {
+                                html += `
+                                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin-bottom: 5px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px;">
+                                        <span><strong style="color: var(--text-primary);">${bucket.name}</strong> <span style="color: var(--text-muted);">(${bucket.bucketType})</span></span>
+                                        <button class="btn btn-small btn-danger" onclick="removeBucketFromChannelInModal('${channelId}', '${bucket.id}', '${bucket.name}')">Remove</button>
+                                    </div>
+                                `;
+                            });
+                            listDiv.innerHTML = html;
+                        }
+
+                        // Refresh available buckets dropdown
+                        const allBucketsRes = await fetch(`${API_BASE}/api/buckets`);
+                        const allBuckets = await allBucketsRes.json();
+                        const select = document.getElementById('availableBucketsSelect');
+                        // Clear and rebuild
+                        select.innerHTML = '<option value="">Select a bucket to add...</option>';
+                        const assignedIds = new Set(buckets.map(b => b.id));
+                        (allBuckets.data?.buckets || []).forEach(bucket => {
+                            if (!assignedIds.has(bucket.id)) {
+                                const option = document.createElement('option');
+                                option.value = bucket.id;
+                                option.textContent = `${bucket.name} (${bucket.bucketType})`;
+                                select.appendChild(option);
+                            }
+                        });
+                        
+                        loadChannels();
+                    } else {
+                        alert(data.error?.message || 'Failed to create bucket');
+                    }
+                } catch (error) {
+                    alert('Network error. Please try again.');
+                    console.error('Failed to create bucket:', error);
+                }
+            });
+        }
+
+        async function addBucketToChannel(channelId) {
+            const select = document.getElementById('availableBucketsSelect');
+            const bucketId = select.value;
+            
+            if (!bucketId) {
+                alert('Please select a bucket');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}/channels/${channelId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ priority: 1 }),
+                });
+
+                if (res.ok) {
+                    // Refresh the bucket list
+                    const channelBucketsRes = await fetch(`${API_BASE}/api/channels/${channelId}/buckets`);
+                    const channelBuckets = await channelBucketsRes.json();
+                    const buckets = channelBuckets.data?.buckets || [];
+
+                    // Update the assigned buckets list
+                    const listDiv = document.getElementById('assignedBucketsList');
+                    if (buckets.length === 0) {
+                        listDiv.innerHTML = '<p style="color: #999; text-align: center; padding: 20px;">No buckets assigned. Add buckets above.</p>';
+                    } else {
+                        let html = '';
+                        buckets.forEach(bucket => {
+                            html += `
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin-bottom: 5px; background: var(--bg-secondary); border-radius: var(--radius); border: 1px solid var(--border);">
+                                    <span><strong style="color: var(--text-primary);">${bucket.name}</strong> <span style="color: var(--text-muted);">(${bucket.bucketType})</span></span>
+                                    <button class="btn btn-small btn-danger" onclick="removeBucketFromChannelInModal('${channelId}', '${bucket.id}', '${bucket.name}')">Remove</button>
+                                </div>
+                            `;
+                        });
+                        listDiv.innerHTML = html;
+                    }
+
+                    // Remove from available dropdown
+                    select.remove(select.selectedIndex);
+                    select.value = '';
+                } else {
+                    const data = await res.json();
+                    alert(data.error?.message || 'Failed to add bucket');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to add bucket:', error);
+            }
+        }
+
+        async function updateChannelSettings(channelId) {
+            try {
+                const useDynamicPlaylist = document.getElementById('manageChannelUseDynamicPlaylist').checked;
+                const includeBumpers = document.getElementById('manageChannelIncludeBumpers').checked;
+                
+                const res = await fetch(`${API_BASE}/api/channels/${channelId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        useDynamicPlaylist,
+                        includeBumpers,
+                    }),
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Channel settings updated successfully!');
+                    // Refresh the modal
+                    const modal = document.querySelector('.admin-modal');
+                    if (modal) {
+                        const channelName = modal.querySelector('h3').textContent.replace('Manage Channel: ', '');
+                        manageChannel(channelId, channelName);
+                    }
+                } else {
+                    alert(data.error?.message || 'Failed to update channel settings');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to update channel settings:', error);
+            }
+        }
+
+        async function removeBucketFromChannelInModal(channelId, bucketId, bucketName) {
+            if (!confirm(`Remove "${bucketName}" from this channel?`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}/channels/${channelId}`, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                });
+
+                if (res.ok) {
+                    // Refresh the bucket list
+                    const channelBucketsRes = await fetch(`${API_BASE}/api/channels/${channelId}/buckets`);
+                    const channelBuckets = await channelBucketsRes.json();
+                    const buckets = channelBuckets.data?.buckets || [];
+
+                    // Update the assigned buckets list
+                    const listDiv = document.getElementById('assignedBucketsList');
+                    if (buckets.length === 0) {
+                        listDiv.innerHTML = '<p style="color: #999; text-align: center; padding: 20px;">No buckets assigned. Add buckets above.</p>';
+                    } else {
+                        let html = '';
+                        buckets.forEach(bucket => {
+                            html += `
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; margin-bottom: 5px; background: var(--bg-secondary); border-radius: var(--radius); border: 1px solid var(--border);">
+                                    <span><strong style="color: var(--text-primary);">${bucket.name}</strong> <span style="color: var(--text-muted);">(${bucket.bucketType})</span></span>
+                                    <button class="btn btn-small btn-danger" onclick="removeBucketFromChannelInModal('${channelId}', '${bucket.id}', '${bucket.name}')">Remove</button>
+                                </div>
+                            `;
+                        });
+                        listDiv.innerHTML = html;
+                    }
+
+                    // Add back to available dropdown
+                    const allBucketsRes = await fetch(`${API_BASE}/api/buckets`);
+                    const allBuckets = await allBucketsRes.json();
+                    const bucket = (allBuckets.data?.buckets || []).find(b => b.id === bucketId);
+                    if (bucket) {
+                        const select = document.getElementById('availableBucketsSelect');
+                        const option = document.createElement('option');
+                        option.value = bucket.id;
+                        option.textContent = `${bucket.name} (${bucket.bucketType})`;
+                        select.appendChild(option);
+                    }
+
+                    // Refresh channel list
+                    loadChannels();
+                } else {
+                    const data = await res.json();
+                    alert(data.error?.message || 'Failed to remove bucket');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to remove bucket:', error);
+            }
+        }
+
+        // ===== Bucket Management Functions =====
+
+        function showAddBucketForm() {
+            document.getElementById('addBucketForm').style.display = 'block';
+            document.getElementById('newBucketForm').reset();
+        }
+
+        function hideAddBucketForm() {
+            document.getElementById('addBucketForm').style.display = 'none';
+        }
+
+        document.getElementById('newBucketForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        name: document.getElementById('bucketName').value,
+                        bucketType: document.getElementById('bucketType').value,
+                        description: document.getElementById('bucketDescription').value || undefined,
+                    }),
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Bucket created successfully!');
+                    hideAddBucketForm();
+                    loadBuckets();
+                } else {
+                    alert(data.error?.message || 'Failed to create bucket');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to create bucket:', error);
+            }
+        });
+
+        async function deleteBucket(bucketId, bucketName) {
+            if (!confirm(`Are you sure you want to delete "${bucketName}"? This cannot be undone.`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}`, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Bucket deleted successfully!');
+                    loadBuckets();
+                } else {
+                    alert(data.error?.message || 'Failed to delete bucket');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to delete bucket:', error);
+            }
+        }
+
+        function closeModal(button) {
+            const modal = button.closest('.admin-modal');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        function switchBucketTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.bucket-tab-content').forEach(content => {
+                content.classList.remove('active');
+                content.style.display = 'none';
+            });
+
+            // Remove active class from all buttons
+            document.querySelectorAll('.bucket-tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            // Show selected tab content
+            const selectedTab = document.getElementById(`bucketTab-${tabName}`);
+            if (selectedTab) {
+                selectedTab.classList.add('active');
+                selectedTab.style.display = 'block';
+            }
+
+            // Add active class to selected button
+            const selectedBtn = document.querySelector(`.bucket-tab-btn[data-tab="${tabName}"]`);
+            if (selectedBtn) {
+                selectedBtn.classList.add('active');
+            }
+        }
+
+        async function manageBucket(bucketId, bucketName) {
+            try {
+                const [bucketResult, bucketMediaResult, allSeriesResult, allChannelsResult, bucketLibrariesResult, allLibrariesResult] = await Promise.allSettled([
+                    fetch(`${API_BASE}/api/buckets/${bucketId}`),
+                    fetch(`${API_BASE}/api/buckets/${bucketId}/media`),
+                    fetch(`${API_BASE}/api/media/series`),
+                    fetch(`${API_BASE}/api/channels`),
+                    fetch(`${API_BASE}/api/buckets/${bucketId}/libraries`),
+                    fetch(`${API_BASE}/api/libraries`),
+                ]);
+
+                // Check for failures
+                const errors = [];
+                if (bucketResult.status === 'rejected') {
+                    errors.push(`Bucket: ${bucketResult.reason?.message || 'Network error'}`);
+                }
+                if (bucketMediaResult.status === 'rejected') {
+                    errors.push(`Bucket media: ${bucketMediaResult.reason?.message || 'Network error'}`);
+                }
+                if (allSeriesResult.status === 'rejected') {
+                    errors.push(`Series: ${allSeriesResult.reason?.message || 'Network error'}`);
+                }
+                if (allChannelsResult.status === 'rejected') {
+                    errors.push(`Channels: ${allChannelsResult.reason?.message || 'Network error'}`);
+                }
+                if (bucketLibrariesResult.status === 'rejected') {
+                    errors.push(`Bucket libraries: ${bucketLibrariesResult.reason?.message || 'Network error'}`);
+                }
+                if (allLibrariesResult.status === 'rejected') {
+                    errors.push(`Libraries: ${allLibrariesResult.reason?.message || 'Network error'}`);
+                }
+
+                if (errors.length > 0) {
+                    throw new Error(errors.join('; '));
+                }
+
+                // Parse responses
+                const bucketRes = bucketResult.value;
+                const bucketMediaRes = bucketMediaResult.value;
+                const allSeriesRes = allSeriesResult.value;
+                const allChannelsRes = allChannelsResult.value;
+                const bucketLibrariesRes = bucketLibrariesResult.value;
+                const allLibrariesRes = allLibrariesResult.value;
+
+                // Check for HTTP errors
+                if (!bucketRes.ok) {
+                    const errorData = await bucketRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+                    throw new Error(`Failed to load bucket: ${errorData.error?.message || 'Unknown error'}`);
+                }
+                if (!bucketLibrariesRes.ok) {
+                    const errorData = await bucketLibrariesRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+                    throw new Error(`Failed to load bucket libraries: ${errorData.error?.message || 'Unknown error'}`);
+                }
+                if (!allLibrariesRes.ok) {
+                    const errorData = await allLibrariesRes.json().catch(() => ({ error: { message: 'Unknown error' } }));
+                    throw new Error(`Failed to load libraries: ${errorData.error?.message || 'Unknown error'}`);
+                }
+
+                const bucket = await bucketRes.json();
+                const bucketMedia = await bucketMediaRes.json();
+                const allSeries = await allSeriesRes.json();
+                const allChannels = await allChannelsRes.json();
+                const bucketLibraries = await bucketLibrariesRes.json();
+                const allLibraries = await allLibrariesRes.json();
+
+                // Bucket media returns IDs, convert to Set
+                const assignedMediaIds = new Set(bucketMedia.data?.mediaFileIds || []);
+                const bucketChannels = bucket.data?.bucket?.channels || [];
+                const mediaCount = assignedMediaIds.size;
+
+                let html = `
+                    <div class="admin-modal-header" style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <h2 style="margin: 0 0 5px 0; font-size: 24px; font-weight: 600; color: var(--text-primary);">${bucketName}</h2>
+                            <p style="margin: 0; color: var(--text-muted); font-size: 14px;">${mediaCount} media file${mediaCount !== 1 ? 's' : ''} - ${bucket.data?.bucket?.bucketType || 'unknown'} bucket</p>
+                        </div>
+                    </div>
+
+                        <!-- Tabs Navigation -->
+                        <div style="display: flex; border-bottom: 2px solid var(--border); background: var(--bg-tertiary);">
+                            <button class="bucket-tab-btn active" onclick="switchBucketTab('media')" data-tab="media">
+                                Media Files
+                            </button>
+                            <button class="bucket-tab-btn" onclick="switchBucketTab('libraries')" data-tab="libraries">
+                                Libraries
+                            </button>
+                            <button class="bucket-tab-btn" onclick="switchBucketTab('channels')" data-tab="channels">
+                                Channels
+                            </button>
+                        </div>
+
+                        <!-- Tab Content -->
+                        <div style="padding: 25px;">
+                            <!-- Media Files Tab -->
+                            <div id="bucketTab-media" class="bucket-tab-content active">
+                                <div style="margin-bottom: 25px;">
+                                    <h3 style="margin: 0 0 15px 0; font-size: 18px; color: var(--text-primary);">Add Media Files</h3>
+                                    <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+                                        Add media files to this bucket. You can browse by series or search all media files.
+                                    </p>
+                                    
+                                    <!-- Series Selection -->
+                                    <div style="background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 20px; margin-bottom: 20px;">
+                                        <div style="display: flex; align-items: center; margin-bottom: 12px;">
+                                            <h4 style="margin: 0; font-size: 16px; color: var(--text-primary);">Browse by Series</h4>
+                                        </div>
+                                        <select id="seriesSelect" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; margin-bottom: 15px; background: var(--bg-secondary); color: var(--text-primary);" onchange="loadSeriesForBucket('${bucketId}', this.value)">
+                                            <option value="">Select a series...</option>
+                `;
+
+                (allSeries.data?.series || []).forEach(seriesName => {
+                    html += `<option value="${encodeURIComponent(seriesName)}">${seriesName}</option>`;
+                });
+
+                html += `
+                                        </select>
+                                        <div id="seriesEpisodesContainer" style="display: none; margin-top: 15px;">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                                <label style="font-weight: 500; color: var(--text-primary);">Select Episodes:</label>
+                                                <div>
+                                                    <button class="btn btn-small" onclick="selectAllEpisodesInSeries('${bucketId}')" style="margin-right: 5px;">Select All</button>
+                                                    <button class="btn btn-small" onclick="deselectAllEpisodesInSeries('${bucketId}')">Deselect All</button>
+                                                </div>
+                                            </div>
+                                            <div id="seriesEpisodesList" style="max-height: 400px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 15px; background: var(--bg-secondary);"></div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Search All Media -->
+                                    <div style="background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 20px;">
+                                        <div style="display: flex; align-items: center; margin-bottom: 12px;">
+                                            <h4 style="margin: 0; font-size: 16px; color: var(--text-primary);">Search All Media</h4>
+                                        </div>
+                                        <input type="text" id="mediaSearchInput" placeholder="Type to search media files..." style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; margin-bottom: 15px; background: var(--bg-secondary); color: var(--text-primary);" onkeyup="searchMediaForBucket('${bucketId}', this.value)">
+                                        <select id="bucketMediaSelect" multiple style="width: 100%; min-height: 250px; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 13px; background: var(--bg-secondary); color: var(--text-primary);">
+                                            <option value="">Loading media files...</option>
+                                        </select>
+                                    </div>
+
+                                    <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border);">
+                                        <button class="btn btn-success" onclick="saveBucketMedia('${bucketId}')" style="padding: 10px 20px; font-size: 14px; font-weight: 500;">
+                                            Save Media Files
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Libraries Tab -->
+                            <div id="bucketTab-libraries" class="bucket-tab-content" style="display: none;">
+                                <div style="margin-bottom: 25px;">
+                                    <h3 style="margin: 0 0 10px 0; font-size: 18px; color: var(--text-primary);">Assigned Libraries</h3>
+                                    <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+                                        Libraries automatically add all their existing media files to this bucket when assigned.
+                                    </p>
+                                    
+                                    <div id="assignedLibrariesList" style="min-height: 60px; border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 20px; background: var(--bg-tertiary);">
+                `;
+
+                const assignedLibraryIds = new Set((bucketLibraries.data?.libraries || []).map(l => l.id));
+                if ((bucketLibraries.data?.libraries || []).length === 0) {
+                    html += `
+                        <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+                            <p style="margin: 0;">No libraries assigned yet</p>
+                            <p style="margin: 5px 0 0 0; font-size: 13px;">Assign libraries below to automatically add their media files</p>
+                        </div>
+                    `;
+                } else {
+                    (bucketLibraries.data?.libraries || []).forEach(library => {
+                        html += `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; margin-bottom: 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; transition: all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'; this.style.background='var(--bg-hover)'" onmouseout="this.style.borderColor='var(--border)'; this.style.background='var(--bg-secondary)'">
+                                <div style="display: flex; align-items: center;">
+                                    <div>
+                                        <strong style="color: var(--text-primary); display: block;">${library.name}</strong>
+                                        <span style="color: var(--text-muted); font-size: 13px;">${library.category} - ${library.path}</span>
+                                    </div>
+                                </div>
+                                <button class="btn btn-small btn-danger" onclick="removeLibraryFromBucket('${bucketId}', '${library.id}', '${library.name}')" style="padding: 6px 12px;">Remove</button>
+                            </div>
+                        `;
+                    });
+                }
+
+                html += `
+                                    </div>
+                                    
+                                    <div style="background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+                                        <h4 style="margin: 0 0 10px 0; font-size: 15px; color: var(--text-primary);">Add New Library</h4>
+                                        <select id="librarySelect" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; margin-bottom: 10px; background: var(--bg-secondary); color: var(--text-primary);">
+                                            <option value="">Select a library to assign...</option>
+                `;
+
+                (allLibraries.data?.libraries || []).forEach(library => {
+                    if (!assignedLibraryIds.has(library.id)) {
+                        html += `<option value="${library.id}">${library.name} (${library.category})</option>`;
+                    }
+                });
+
+                html += `
+                                        </select>
+                                        <button class="btn btn-success" onclick="assignLibraryToBucket('${bucketId}')" style="width: 100%; padding: 10px; font-weight: 500;">
+                                            ? Assign Library
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Channels Tab -->
+                            <div id="bucketTab-channels" class="bucket-tab-content" style="display: none;">
+                                <div style="margin-bottom: 25px;">
+                                    <h3 style="margin: 0 0 10px 0; font-size: 18px; color: var(--text-primary);">Assigned Channels</h3>
+                                    <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+                                        Channels use this bucket to get their media files for streaming.
+                                    </p>
+                                    
+                                    <div id="assignedChannelsList" style="min-height: 60px; border: 1px solid var(--border); border-radius: 6px; padding: 15px; margin-bottom: 20px; background: var(--bg-tertiary);">
+                `;
+
+                const assignedChannels = (Array.isArray(allChannels.data) ? allChannels.data : (allChannels.data?.channels || [])).filter(channel => 
+                    bucketChannels.some(c => c.id === channel.id)
+                );
+
+                if (assignedChannels.length === 0) {
+                    html += `
+                        <div style="text-align: center; padding: 30px; color: var(--text-muted);">
+                            <p style="margin: 0;">No channels assigned yet</p>
+                            <p style="margin: 5px 0 0 0; font-size: 13px;">Assign this bucket to channels below</p>
+                        </div>
+                    `;
+                } else {
+                    assignedChannels.forEach(channel => {
+                        html += `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; margin-bottom: 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; transition: all 0.2s;" onmouseover="this.style.borderColor='var(--accent)'; this.style.background='var(--bg-hover)'" onmouseout="this.style.borderColor='var(--border)'; this.style.background='var(--bg-secondary)'">
+                                <div style="display: flex; align-items: center;">
+                                    <div>
+                                        <strong style="color: var(--text-primary); display: block;">${channel.config.name}</strong>
+                                        <span style="color: var(--text-muted); font-size: 13px;">${channel.config.slug} - ${channel.state}</span>
+                                    </div>
+                                </div>
+                                <button class="btn btn-small btn-danger" onclick="removeBucketFromChannel('${bucketId}', '${channel.id}', '${channel.config.name}')" style="padding: 6px 12px;">Remove</button>
+                            </div>
+                        `;
+                    });
+                }
+
+                html += `
+                                    </div>
+                                    
+                                    <div style="background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 15px;">
+                                        <h4 style="margin: 0 0 10px 0; font-size: 15px; color: var(--text-primary);">Assign to Channel</h4>
+                                        <select id="channelSelect" style="width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; margin-bottom: 10px; background: var(--bg-secondary); color: var(--text-primary);">
+                                            <option value="">Select a channel...</option>
+                `;
+
+                (Array.isArray(allChannels.data) ? allChannels.data : (allChannels.data?.channels || [])).forEach(channel => {
+                    const isAssigned = bucketChannels.some(c => c.id === channel.id);
+                    if (!isAssigned) {
+                        html += `<option value="${channel.id}">${channel.config.name} (${channel.config.slug})</option>`;
+                    }
+                });
+
+                html += `
+                                        </select>
+                                        <button class="btn btn-success" onclick="assignBucketToChannel('${bucketId}')" style="width: 100%; padding: 10px; font-weight: 500;">
+                                            ? Assign to Channel
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                const modal = document.createElement('div');
+                modal.className = 'admin-modal';
+                modal.innerHTML = `
+                    <div class="admin-modal-content" style="max-width: 900px;">
+                        <div class="admin-modal-body">
+                            ${html}
+                        </div>
+                        <div class="admin-modal-footer">
+                            <button class="btn btn-small" onclick="closeModal(this)">Close</button>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+                // Close on background click
+                modal.addEventListener('click', (e) => {
+                    if (e.target === modal) {
+                        modal.remove();
+                    }
+                });
+                // Load all media for the search dropdown
+                loadAllMediaForBucket(bucketId);
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                alert(`Failed to load bucket management data: ${errorMessage}`);
+                console.error('Failed to manage bucket:', error);
+            }
+        }
+
+        async function loadSeriesForBucket(bucketId, encodedSeriesName) {
+            if (!encodedSeriesName) {
+                document.getElementById('seriesEpisodesContainer').style.display = 'none';
+                return;
+            }
+
+            try {
+                const seriesName = decodeURIComponent(encodedSeriesName);
+                const res = await fetch(`${API_BASE}/api/media/series/${encodedSeriesName}`);
+                const data = await res.json();
+                
+                if (!data.success) {
+                    alert('Failed to load series');
+                    return;
+                }
+
+                const series = data.data;
+                const container = document.getElementById('seriesEpisodesContainer');
+                const listDiv = document.getElementById('seriesEpisodesList');
+                
+                container.style.display = 'block';
+                
+                let html = `
+                    <div style="margin-bottom: 10px;">
+                        <button class="btn btn-small" onclick="selectAllEpisodesInSeries('${bucketId}')">Select All Episodes</button>
+                        <button class="btn btn-small" onclick="deselectAllEpisodesInSeries('${bucketId}')">Deselect All</button>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px;">
+                `;
+                
+                series.seasons.forEach((seasonData, seasonIndex) => {
+                    const seasonLabel = seasonData.season === null ? 'Unknown Season' : `Season ${seasonData.season}`;
+                    const seasonId = `season-${bucketId}-${seasonIndex}`;
+                    html += `
+                        <div style="border: 1px solid var(--border); border-radius: 5px; padding: 10px; background: var(--bg-secondary);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <strong style="color: var(--text-primary);">${seasonLabel}</strong>
+                                <button class="btn btn-small" style="padding: 2px 8px; font-size: 0.8em;" onclick="selectAllEpisodesInSeason('${seasonId}')">Select All</button>
+                            </div>
+                            <div id="${seasonId}">
+                    `;
+                    
+                    seasonData.episodes.forEach(episode => {
+                        const epLabel = episode.episode !== null && episode.episode !== undefined 
+                            ? `E${String(episode.episode).padStart(2, '0')}` 
+                            : '';
+                        const title = episode.title || episode.filename;
+                        const isSelected = document.querySelector(`#bucketMediaSelect option[value="${episode.id}"]`)?.selected;
+                        html += `
+                            <label style="display: block; padding: 5px; cursor: pointer; border-radius: 3px; margin-top: 5px; color: var(--text-primary); ${isSelected ? 'background: var(--accent); color: white;' : ''}">
+                                <input type="checkbox" value="${episode.id}" 
+                                       onchange="toggleBucketMediaOption('${episode.id}', this.checked)"
+                                       ${isSelected ? 'checked' : ''}>
+                                <span style="margin-left: 5px;">${epLabel} ${title}</span>
+                            </label>
+                        `;
+                    });
+                    
+                    html += `
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                listDiv.innerHTML = html;
+            } catch (error) {
+                alert('Failed to load series episodes');
+                console.error('Failed to load series for bucket:', error);
+            }
+        }
+
+        function selectAllEpisodesInSeason(seasonId) {
+            const seasonDiv = document.getElementById(seasonId);
+            if (!seasonDiv) return;
+            
+            const checkboxes = seasonDiv.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                if (!checkbox.checked) {
+                    checkbox.checked = true;
+                    toggleBucketMediaOption(checkbox.value, true);
+                }
+            });
+        }
+
+        function selectAllEpisodesInSeries(bucketId) {
+            const listDiv = document.getElementById('seriesEpisodesList');
+            if (!listDiv) return;
+            
+            const checkboxes = listDiv.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                if (!checkbox.checked) {
+                    checkbox.checked = true;
+                    toggleBucketMediaOption(checkbox.value, true);
+                }
+            });
+        }
+
+        function deselectAllEpisodesInSeries(bucketId) {
+            const listDiv = document.getElementById('seriesEpisodesList');
+            if (!listDiv) return;
+            
+            const checkboxes = listDiv.querySelectorAll('input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                if (checkbox.checked) {
+                    checkbox.checked = false;
+                    toggleBucketMediaOption(checkbox.value, false);
+                }
+            });
+        }
+
+        function toggleBucketMediaOption(mediaId, checked) {
+            const select = document.getElementById('bucketMediaSelect');
+            const option = select.querySelector(`option[value="${mediaId}"]`);
+            if (option) {
+                option.selected = checked;
+            } else {
+                // Option doesn't exist yet, need to add it
+                // This will be handled when we load all media
+            }
+        }
+
+        async function loadAllMediaForBucket(bucketId) {
+            try {
+                const res = await fetch(`${API_BASE}/api/media?limit=10000`);
+                const data = await res.json();
+                const allMedia = data.data?.mediaFiles || [];
+                
+                const select = document.getElementById('bucketMediaSelect');
+                select.innerHTML = '';
+                
+                allMedia.forEach(media => {
+                    const option = document.createElement('option');
+                    option.value = media.id;
+                    option.textContent = media.showName 
+                        ? `${media.showName} - ${media.filename}`
+                        : media.filename;
+                    select.appendChild(option);
+                });
+
+                // Restore selected state from bucket
+                const bucketRes = await fetch(`${API_BASE}/api/buckets/${bucketId}/media`);
+                const bucketData = await bucketRes.json();
+                const assignedIds = new Set(bucketData.data?.mediaFileIds || []);
+                
+                assignedIds.forEach(id => {
+                    const option = select.querySelector(`option[value="${id}"]`);
+                    if (option) {
+                        option.selected = true;
+                    }
+                });
+            } catch (error) {
+                console.error('Failed to load all media:', error);
+            }
+        }
+
+        function searchMediaForBucket(bucketId, searchTerm) {
+            const select = document.getElementById('bucketMediaSelect');
+            const options = Array.from(select.options);
+            
+            if (!searchTerm) {
+                options.forEach(opt => opt.style.display = '');
+                return;
+            }
+            
+            const term = searchTerm.toLowerCase();
+            options.forEach(opt => {
+                if (opt.value === '') {
+                    opt.style.display = 'none';
+                    return;
+                }
+                const text = opt.textContent.toLowerCase();
+                opt.style.display = text.includes(term) ? '' : 'none';
+            });
+        }
+
+        async function saveBucketMedia(bucketId) {
+            const select = document.getElementById('bucketMediaSelect');
+            const selectedIds = Array.from(select.selectedOptions)
+                .filter(opt => opt.value !== '')
+                .map(opt => opt.value);
+
+            try {
+                // Get current media (returns IDs)
+                const currentRes = await fetch(`${API_BASE}/api/buckets/${bucketId}/media`);
+                const currentData = await currentRes.json();
+                
+                if (!currentRes.ok) {
+                    throw new Error(currentData.error?.message || 'Failed to get current media');
+                }
+                
+                const currentMediaIds = currentData.data?.mediaFileIds || [];
+
+                // Remove media that are no longer selected
+                let removedCount = 0;
+                for (const mediaId of currentMediaIds) {
+                    if (!selectedIds.includes(mediaId)) {
+                        const deleteRes = await fetch(`${API_BASE}/api/buckets/${bucketId}/media/${mediaId}`, {
+                            method: 'DELETE',
+                            credentials: 'include',
+                        });
+                        if (!deleteRes.ok) {
+                            const deleteData = await deleteRes.json();
+                            throw new Error(`Failed to remove media: ${deleteData.error?.message || 'Unknown error'}`);
+                        }
+                        removedCount++;
+                    }
+                }
+
+                // Add new media
+                const toAdd = selectedIds.filter(id => !currentMediaIds.includes(id));
+                let addedCount = 0;
+                if (toAdd.length > 0) {
+                    const addRes = await fetch(`${API_BASE}/api/buckets/${bucketId}/media`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ mediaFileIds: toAdd }),
+                    });
+                    
+                    if (!addRes.ok) {
+                        const addData = await addRes.json();
+                        throw new Error(`Failed to add media: ${addData.error?.message || 'Unknown error'}`);
+                    }
+                    addedCount = toAdd.length;
+                }
+
+                const message = addedCount > 0 || removedCount > 0
+                    ? `Media files updated successfully! ${addedCount > 0 ? `Added ${addedCount} file(s).` : ''} ${removedCount > 0 ? `Removed ${removedCount} file(s).` : ''}`
+                    : 'No changes made.';
+                alert(message);
+                closeModal(document.querySelector('.admin-modal'));
+                loadBuckets();
+            } catch (error) {
+                alert(`Failed to update media files: ${error.message || 'Unknown error'}`);
+                console.error('Failed to save bucket media:', error);
+            }
+        }
+
+        async function assignLibraryToBucket(bucketId) {
+            const librarySelect = document.getElementById('librarySelect');
+            const libraryFolderId = librarySelect.value;
+            
+            if (!libraryFolderId) {
+                alert('Please select a library');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}/libraries`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ libraryFolderId }),
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Library assigned successfully!');
+                    // Refresh the bucket modal
+                    const bucketName = document.querySelector('.admin-modal h3')?.textContent?.replace('Manage Bucket: ', '') || '';
+                    if (bucketName) {
+                        // Close current modal and reopen
+                        document.querySelector('.admin-modal')?.remove();
+                        manageBucket(bucketId, bucketName);
+                    }
+                } else {
+                    alert(data.error?.message || 'Failed to assign library');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to assign library:', error);
+            }
+        }
+
+        async function removeLibraryFromBucket(bucketId, libraryFolderId, libraryName) {
+            if (!confirm(`Are you sure you want to remove "${libraryName}" from this bucket?`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}/libraries/${libraryFolderId}`, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Library removed successfully!');
+                    // Refresh the bucket modal
+                    const bucketName = document.querySelector('.admin-modal h3')?.textContent?.replace('Manage Bucket: ', '') || '';
+                    if (bucketName) {
+                        // Close current modal and reopen
+                        document.querySelector('.admin-modal')?.remove();
+                        manageBucket(bucketId, bucketName);
+                    }
+                } else {
+                    alert(data.error?.message || 'Failed to remove library');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to remove library:', error);
+            }
+        }
+
+        async function assignBucketToChannel(bucketId) {
+            const channelId = document.getElementById('channelSelect').value;
+            if (!channelId) {
+                alert('Please select a channel');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}/channels/${channelId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ priority: 1 }),
+                });
+
+                if (res.ok) {
+                    alert('Bucket assigned to channel successfully!');
+                    loadBuckets();
+                } else {
+                    const data = await res.json();
+                    alert(data.error?.message || 'Failed to assign bucket');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to assign bucket:', error);
+            }
+        }
+
+        async function removeBucketFromChannel(bucketId, channelId, channelName) {
+            if (!confirm(`Remove bucket from "${channelName}"?`)) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}/channels/${channelId}`, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                });
+
+                if (res.ok) {
+                    alert('Bucket removed from channel successfully!');
+                    loadBuckets();
+                } else {
+                    const data = await res.json();
+                    alert(data.error?.message || 'Failed to remove bucket');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to remove bucket:', error);
+            }
+        }
+
+        // ============================================================================
+        // PLAYLIST MANAGEMENT FUNCTIONS
+        // ============================================================================
+
+        let currentPlaylistChannelId = null;
+        let playlistBlocks = [];
+
+        async function loadPlaylists() {
+            // Load channels for dropdown
+            try {
+                const res = await fetch(`${API_BASE}/api/channels`);
+                const data = await res.json();
+                const select = document.getElementById('playlistChannelSelect');
+                
+                if (data.success && data.data) {
+                    const channels = Array.isArray(data.data) ? data.data : [];
+                    select.innerHTML = '<option value="">Select a channel...</option>';
+                    channels.forEach(channel => {
+                        const option = document.createElement('option');
+                        option.value = channel.id;
+                        option.textContent = channel.config.name;
+                        select.appendChild(option);
+                    });
+                }
+            } catch (error) {
+                console.error('Failed to load channels:', error);
+            }
+        }
+
+        async function loadPlaylistBlocks() {
+            const channelId = document.getElementById('playlistChannelSelect').value;
+            const listDiv = document.getElementById('playlistBlocksList');
+            
+            if (!channelId) {
+                listDiv.innerHTML = '<div class="loading">Select a channel to view schedule blocks</div>';
+                document.getElementById('playlistInfo').style.display = 'none';
+                return;
+            }
+
+            currentPlaylistChannelId = channelId;
+            listDiv.innerHTML = '<div class="loading">Loading schedule blocks...</div>';
+
+            try {
+                // Get channel info
+                const channelRes = await fetch(`${API_BASE}/api/channels/${channelId}`);
+                const channelData = await channelRes.json();
+                
+                if (channelData.success) {
+                    const channel = channelData.data;
+                    document.getElementById('playlistChannelName').textContent = channel.config.name;
+                    const useDynamic = channel.config.useDynamicPlaylist ? 'Dynamic Playlist Enabled' : 'Static Playlist';
+                    document.getElementById('playlistChannelStatus').textContent = `${useDynamic} ? ${channel.state || 'idle'}`;
+                    document.getElementById('playlistInfo').style.display = 'block';
+                }
+
+                // Get schedule blocks
+                const blocksRes = await fetch(`${API_BASE}/api/schedules/channels/${channelId}/blocks`);
+                const blocksData = await blocksRes.json();
+
+                if (blocksRes.ok && blocksData.success) {
+                    playlistBlocks = blocksData.data || [];
+                    renderPlaylistBlocks(playlistBlocks);
+                } else {
+                    listDiv.innerHTML = `<div class="error">Failed to load blocks: ${blocksData.error?.message || 'Unknown error'}</div>`;
+                }
+
+                // Load buckets for dropdown
+                await loadBucketsForBlockForm();
+            } catch (error) {
+                listDiv.innerHTML = `<div class="error">Failed to load blocks: ${error.message}</div>`;
+                console.error('Failed to load playlist blocks:', error);
+            }
+        }
+
+        function renderPlaylistBlocks(blocks) {
+            const listDiv = document.getElementById('playlistBlocksList');
+            
+            if (blocks.length === 0) {
+                listDiv.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No schedule blocks defined. Click "Add Block" to create one.</div>';
+                return;
+            }
+
+            // Sort by priority (highest first), then by start time
+            const sorted = [...blocks].sort((a, b) => {
+                if (b.priority !== a.priority) return b.priority - a.priority;
+                return a.startTime.localeCompare(b.startTime);
+            });
+
+            let html = '<div style="display: flex; flex-direction: column; gap: 10px;">';
+            
+            sorted.forEach((block, index) => {
+                const days = block.dayOfWeek && block.dayOfWeek.length > 0
+                    ? block.dayOfWeek.map(d => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(', ')
+                    : 'Every day';
+                
+                html += `
+                    <div class="card" style="padding: 15px; border: 1px solid var(--border); ${!block.enabled ? 'opacity: 0.6;' : ''}">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                                    <h3 style="margin: 0; font-size: 16px;">${escapeHtml(block.name)}</h3>
+                                    ${!block.enabled ? '<span style="background: var(--danger); padding: 2px 8px; border-radius: var(--radius); font-size: 12px;">Disabled</span>' : ''}
+                                    <span style="background: var(--bg-hover); padding: 2px 8px; border-radius: var(--radius); font-size: 12px;">Priority: ${block.priority}</span>
+                                </div>
+                                <div style="color: var(--text-secondary); font-size: 14px; margin-bottom: 8px;">
+                                    <div><strong>Time:</strong> ${block.startTime} - ${block.endTime}</div>
+                                    <div><strong>Days:</strong> ${days}</div>
+                                    <div><strong>Bucket:</strong> ${block.bucket ? escapeHtml(block.bucket.name) : 'None'}</div>
+                                    <div><strong>Mode:</strong> ${block.playbackMode || 'sequential'}</div>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 5px; align-items: start;">
+                                <button class="btn btn-small" onclick="moveBlockUp('${block.id}')" ${index === 0 ? 'disabled' : ''} title="Move Up">?</button>
+                                <button class="btn btn-small" onclick="moveBlockDown('${block.id}')" ${index === sorted.length - 1 ? 'disabled' : ''} title="Move Down">?</button>
+                                ${block.bucketId ? `<button class="btn btn-small" onclick="resetBlockProgression('${block.id}', '${block.bucketId}', '${escapeHtml(block.name)}', '${escapeHtml(block.bucket?.name || 'Unknown')}')" title="Reset Progression">Reset</button>` : ''}
+                                <button class="btn btn-small" onclick="editBlock('${block.id}')" title="Edit">Edit</button>
+                                <button class="btn btn-small btn-danger" onclick="deleteBlock('${block.id}')" title="Delete">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            listDiv.innerHTML = html;
+        }
+
+        function updateManageBucketButton() {
+            const select = document.getElementById('blockBucketId');
+            const btn = document.getElementById('manageBucketBtn');
+            if (select && btn) {
+                btn.style.display = select.value ? 'inline-block' : 'none';
+            }
+        }
+
+        async function manageSelectedBucketFromForm() {
+            const select = document.getElementById('blockBucketId');
+            if (!select || !select.value) {
+                alert('Please select a bucket first');
+                return;
+            }
+            
+            // Get bucket name from selected option
+            const bucketName = select.options[select.selectedIndex].textContent.split(' (')[0];
+            
+            // Open manage bucket modal as overlay (keeps form context)
+            await manageBucket(select.value, bucketName);
+        }
+
+        async function loadBucketsForBlockForm() {
+            const select = document.getElementById('blockBucketId');
+            if (!select) {
+                console.warn('blockBucketId select element not found');
+                return;
+            }
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets`);
+                const data = await res.json();
+                
+                if (data.success && data.data && data.data.buckets) {
+                    const buckets = Array.isArray(data.data.buckets) ? data.data.buckets : [];
+                    const currentValue = select.value; // Save current selection
+                    select.innerHTML = '<option value="">Select a bucket...</option>';
+                    buckets.forEach(bucket => {
+                        const option = document.createElement('option');
+                        option.value = bucket.id;
+                        option.textContent = `${bucket.name} (${bucket.bucketType})`;
+                        select.appendChild(option);
+                    });
+                    // Restore selection if it still exists
+                    if (currentValue) {
+                        select.value = currentValue;
+                    }
+                    // Update manage button visibility
+                    updateManageBucketButton();
+                } else {
+                    console.warn('Unexpected API response format:', data);
+                    select.innerHTML = '<option value="">No buckets available</option>';
+                    updateManageBucketButton();
+                }
+            } catch (error) {
+                console.error('Failed to load buckets:', error);
+                select.innerHTML = '<option value="">Error loading buckets</option>';
+                updateManageBucketButton();
+            }
+        }
+
+        async function showCreateBucketInSchedulerModal() {
+            const modal = document.createElement('div');
+            modal.className = 'admin-modal';
+            modal.innerHTML = `
+                <div class="admin-modal-content" style="max-width: 500px;">
+                    <div class="admin-modal-header">
+                        <h3>Create New Bucket</h3>
+                    </div>
+                    <div class="admin-modal-body">
+                        <form id="createBucketInSchedulerForm">
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Bucket Name:</label>
+                                <input type="text" id="schedulerBucketName" required placeholder="My Bucket" style="width: 100%; padding: 8px;">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Bucket Type:</label>
+                                <select id="schedulerBucketType" required style="width: 100%; padding: 8px;">
+                                    <option value="global">Global (available to all channels)</option>
+                                    <option value="channel_specific">Channel Specific</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label>Description (optional):</label>
+                                <textarea id="schedulerBucketDescription" rows="3" placeholder="Description..." style="width: 100%; padding: 8px;"></textarea>
+                            </div>
+                            <div class="admin-modal-footer" style="margin-top: 20px;">
+                                <button type="submit" class="btn btn-small btn-success">Create Bucket</button>
+                                <button type="button" class="btn btn-small" onclick="closeModal(this)">Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            
+            // Close on background click
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                }
+            });
+
+            // Handle form submission
+            document.getElementById('createBucketInSchedulerForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                try {
+                    const res = await fetch(`${API_BASE}/api/buckets`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({
+                            name: document.getElementById('schedulerBucketName').value,
+                            bucketType: document.getElementById('schedulerBucketType').value,
+                            description: document.getElementById('schedulerBucketDescription').value || undefined,
+                        }),
+                    });
+
+                    const data = await res.json();
+                    if (res.ok && data.success) {
+                        const bucketId = data.data?.bucket?.id;
+                        const bucketName = data.data?.bucket?.name;
+                        
+                        // If we're in the context of a channel (schedule generator), automatically associate the bucket with the channel
+                        if (currentPlaylistChannelId && bucketId) {
+                            try {
+                                await fetch(`${API_BASE}/api/buckets/${bucketId}/channels/${currentPlaylistChannelId}`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    credentials: 'include',
+                                    body: JSON.stringify({ priority: 1 }),
+                                });
+                            } catch (error) {
+                                console.error('Failed to associate bucket with channel:', error);
+                                // Don't fail the whole operation if association fails
+                            }
+                        }
+                        
+                        // Close modal
+                        modal.remove();
+                        
+                        // Refresh the bucket dropdown and auto-select the new bucket
+                        await loadBucketsForBlockForm();
+                        const select = document.getElementById('blockBucketId');
+                        if (select && bucketId) {
+                            select.value = bucketId;
+                            updateManageBucketButton();
+                            
+                            // Show inline success message
+                            const successMsg = document.getElementById('bucketCreateSuccess');
+                            if (successMsg) {
+                                successMsg.innerHTML = `Bucket "${bucketName}" created and selected! Click "Manage Bucket" to add media files.`;
+                                successMsg.style.display = 'block';
+                                // Auto-hide after 5 seconds
+                                setTimeout(() => {
+                                    successMsg.style.display = 'none';
+                                }, 5000);
+                            }
+                        }
+                    } else {
+                        alert(data.error?.message || 'Failed to create bucket');
+                    }
+                } catch (error) {
+                    alert('Network error. Please try again.');
+                    console.error('Failed to create bucket:', error);
+                }
+            });
+        }
+
+        function showAddBlockForm(blockId = null) {
+            const form = document.getElementById('addBlockForm');
+            const formTitle = form.querySelector('h3');
+            const submitBtn = form.querySelector('button[type="submit"]');
+            
+            if (blockId) {
+                // Edit mode
+                const block = playlistBlocks.find(b => b.id === blockId);
+                if (block) {
+                    formTitle.textContent = 'Edit Schedule Block';
+                    submitBtn.textContent = 'Update Block';
+                    document.getElementById('blockId').value = block.id;
+                    document.getElementById('blockName').value = block.name;
+                    // Strip seconds from time for HTML time input (HH:MM:SS -> HH:MM)
+                    document.getElementById('blockStartTime').value = block.startTime.substring(0, 5);
+                    document.getElementById('blockEndTime').value = block.endTime.substring(0, 5);
+                    document.getElementById('blockPlaybackMode').value = block.playbackMode || 'sequential';
+                    document.getElementById('blockPriority').value = block.priority || 1;
+                    document.getElementById('blockEnabled').checked = block.enabled !== false;
+                    
+                    // Set day checkboxes
+                    document.querySelectorAll('input[name="dayOfWeek"]').forEach(cb => cb.checked = false);
+                    if (block.dayOfWeek && block.dayOfWeek.length > 0) {
+                        block.dayOfWeek.forEach(day => {
+                            const cb = document.querySelector(`input[name="dayOfWeek"][value="${day}"]`);
+                            if (cb) cb.checked = true;
+                        });
+                    }
+                    
+                    // Set bucket
+                    setTimeout(() => {
+                        document.getElementById('blockBucketId').value = block.bucketId || '';
+                        updateManageBucketButton();
+                    }, 100);
+                }
+            } else {
+                // Create mode
+                formTitle.textContent = 'Add Schedule Block';
+                submitBtn.textContent = 'Save Block';
+                document.getElementById('newBlockForm').reset();
+                document.getElementById('blockId').value = '';
+                document.getElementById('blockPriority').value = '1';
+                document.getElementById('blockEnabled').checked = true;
+                updateManageBucketButton();
+            }
+            
+            form.style.display = 'block';
+            loadBucketsForBlockForm();
+        }
+
+        function hideAddBlockForm() {
+            document.getElementById('addBlockForm').style.display = 'none';
+            document.getElementById('newBlockForm').reset();
+            document.getElementById('blockId').value = '';
+        }
+
+        function toggleAllDays() {
+            const allDays = document.getElementById('allDays').checked;
+            document.querySelectorAll('input[name="dayOfWeek"]').forEach(cb => {
+                if (cb.id !== 'allDays') {
+                    cb.checked = allDays;
+                }
+            });
+        }
+
+        function editBlock(blockId) {
+            showAddBlockForm(blockId);
+        }
+
+        async function saveBlock(event) {
+            event.preventDefault();
+            
+            if (!currentPlaylistChannelId) {
+                alert('Please select a channel first');
+                return;
+            }
+
+            const blockId = document.getElementById('blockId').value;
+            const selectedDays = Array.from(document.querySelectorAll('input[name="dayOfWeek"]:checked'))
+                .map(cb => parseInt(cb.value))
+                .filter(v => !isNaN(v));
+            
+            const data = {
+                name: document.getElementById('blockName').value,
+                dayOfWeek: selectedDays.length > 0 ? selectedDays : null,
+                startTime: document.getElementById('blockStartTime').value + ':00',
+                endTime: document.getElementById('blockEndTime').value + ':00',
+                bucketId: document.getElementById('blockBucketId').value || null,
+                playbackMode: document.getElementById('blockPlaybackMode').value,
+                priority: parseInt(document.getElementById('blockPriority').value) || 1,
+                enabled: document.getElementById('blockEnabled').checked,
+            };
+
+            try {
+                const url = blockId
+                    ? `${API_BASE}/api/schedules/channels/${currentPlaylistChannelId}/blocks/${blockId}`
+                    : `${API_BASE}/api/schedules/channels/${currentPlaylistChannelId}/blocks`;
+                
+                const method = blockId ? 'PUT' : 'POST';
+                
+                const res = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(data),
+                });
+
+                const result = await res.json();
+                
+                if (res.ok && result.success) {
+                    alert(blockId ? 'Block updated successfully!' : 'Block created successfully!');
+                    hideAddBlockForm();
+                    loadPlaylistBlocks();
+                } else {
+                    alert(result.error?.message || 'Failed to save block');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to save block:', error);
+            }
+        }
+
+        async function deleteBlock(blockId) {
+            if (!confirm('Are you sure you want to delete this schedule block?')) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/schedules/channels/${currentPlaylistChannelId}/blocks/${blockId}`, {
+                    method: 'DELETE',
+                    credentials: 'include',
+                });
+
+                const data = await res.json();
+                
+                if (res.ok && data.success) {
+                    alert('Block deleted successfully!');
+                    loadPlaylistBlocks();
+                } else {
+                    alert(data.error?.message || 'Failed to delete block');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to delete block:', error);
+            }
+        }
+
+        async function moveBlockUp(blockId) {
+            const index = playlistBlocks.findIndex(b => b.id === blockId);
+            if (index <= 0) return;
+            
+            await reorderBlocks([...playlistBlocks].map((b, i) => {
+                if (i === index) return playlistBlocks[index - 1].id;
+                if (i === index - 1) return playlistBlocks[index].id;
+                return b.id;
+            }));
+        }
+
+        async function moveBlockDown(blockId) {
+            const index = playlistBlocks.findIndex(b => b.id === blockId);
+            if (index < 0 || index >= playlistBlocks.length - 1) return;
+            
+            await reorderBlocks([...playlistBlocks].map((b, i) => {
+                if (i === index) return playlistBlocks[index + 1].id;
+                if (i === index + 1) return playlistBlocks[index].id;
+                return b.id;
+            }));
+        }
+
+        async function reorderBlocks(blockIds) {
+            try {
+                const res = await fetch(`${API_BASE}/api/schedules/channels/${currentPlaylistChannelId}/blocks/reorder`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ blockIds }),
+                });
+
+                const data = await res.json();
+                
+                if (res.ok && data.success) {
+                    loadPlaylistBlocks();
+                } else {
+                    alert(data.error?.message || 'Failed to reorder blocks');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to reorder blocks:', error);
+            }
+        }
+
+        async function resetBlockProgression(blockId, bucketId, blockName, bucketName) {
+            if (!currentPlaylistChannelId) {
+                alert('No channel selected');
+                return;
+            }
+            
+            if (!confirm(`Reset progression for bucket "${bucketName}" in block "${blockName}"?\n\nThis will restart playback from the beginning of the bucket for this channel.`)) {
+                return;
+            }
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/buckets/${bucketId}/progression/${currentPlaylistChannelId}/reset`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                });
+                
+                const data = await res.json();
+                
+                if (res.ok && data.success) {
+                    alert('Progression reset successfully! The channel will start from the beginning of the bucket next time this block runs.');
+                } else {
+                    alert(data.error?.message || 'Failed to reset progression');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to reset progression:', error);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initialize on load
+        init();
+    </script>
+</body>
+</html>
+

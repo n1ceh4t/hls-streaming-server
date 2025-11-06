@@ -1,0 +1,39 @@
+{
+  "name": "hls-streaming-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for HLS Streaming Server - enables AI assistants to manage channels, libraries, and playlists",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "hls-streaming-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "node node_modules/typescript/bin/tsc",
+    "dev": "node node_modules/typescript/bin/tsc --watch",
+    "start": "node dist/index.js",
+    "install-deps": "npm install --no-bin-links --ignore-scripts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "hls",
+    "streaming",
+    "iptv",
+    "claude",
+    "ai-assistant"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
