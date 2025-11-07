@@ -82,10 +82,31 @@ export class VirtualTimeService {
       elapsedSeconds = 0;
     } else {
       // Currently streaming - add elapsed time since last update
+      // CRITICAL: Use updatedAt if available, otherwise use virtualStartTime
+      // But if updatedAt is missing, we should use the most recent timestamp available
       const lastUpdate = channel.updatedAt || channel.virtualStartTime;
       if (lastUpdate) {
         elapsedSeconds = Math.floor((now.getTime() - lastUpdate.getTime()) / 1000);
         elapsedSeconds = Math.max(0, elapsedSeconds);
+        
+        // Safety check: If elapsed time is unreasonably large (more than 24 hours),
+        // it likely means updatedAt is stale or missing. In this case, don't advance
+        // to prevent position jumps. This can happen if the update loop hasn't run
+        // or if there was a database issue.
+        const MAX_REASONABLE_ELAPSED = 24 * 60 * 60; // 24 hours in seconds
+        if (elapsedSeconds > MAX_REASONABLE_ELAPSED) {
+          logger.warn(
+            {
+              channelId: channel.channelId,
+              elapsedSeconds,
+              lastUpdate: lastUpdate.toISOString(),
+              now: now.toISOString(),
+              hasUpdatedAt: !!channel.updatedAt,
+            },
+            'Elapsed time is unreasonably large - likely stale updatedAt. Not advancing virtual time.'
+          );
+          elapsedSeconds = 0;
+        }
       }
     }
 

@@ -193,7 +193,8 @@ export class PlaylistService {
    * 
    * Modifies playlist content in-memory (does not write to file).
    * Inserts discontinuity tags immediately before segments that match
-   * recorded transition points. Cleans up processed transition points.
+   * recorded transition points. Only clears transition points after the segment
+   * has actually appeared in the playlist to handle timing issues.
    * 
    * @param content - Original playlist content
    * @param transitions - Set of segment numbers needing discontinuity tags
@@ -233,6 +234,8 @@ export class PlaylistService {
               'Skipped duplicate discontinuity tag (already present)'
             );
           }
+          // Only mark as processed if the segment actually appears in the playlist
+          // This ensures we don't clear the transition point before it's used
           processedTransitions.add(segmentNumber);
         }
       }
@@ -240,9 +243,14 @@ export class PlaylistService {
       newLines.push(line);
     }
 
-    // Clean up processed transitions
+    // Clean up processed transitions only after they've been injected
+    // This prevents clearing transition points before segments appear in the playlist
     processedTransitions.forEach(segNum => {
       this.clearTransitionPoint(channelId, segNum);
+      logger.debug(
+        { channelId, segmentNumber: segNum },
+        'Cleared transition point after successful injection'
+      );
     });
 
     return newLines.join('\n');

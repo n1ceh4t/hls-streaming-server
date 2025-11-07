@@ -509,7 +509,8 @@ export class ChannelService {
    */
   public async startChannel(
     channelId: string,
-    startIndex?: number
+    startIndex?: number,
+    seekPosition?: number
   ): Promise<void> {
     const channel = await this.getChannel(channelId);
     let media = await this.getChannelMedia(channelId);
@@ -702,18 +703,55 @@ export class ChannelService {
           );
         }
       } else if (startIndex !== undefined) {
-        // Explicit index provided - use it, start from beginning during active streaming
+        // Explicit index provided - use it
         actualStartIndex = startIndex;
-        seekToSeconds = 0; // Always start from beginning when explicitly specifying index during transitions
+        // Use provided seek position if available (e.g., from EPG sync), otherwise start from beginning
+        seekToSeconds = seekPosition !== undefined ? seekPosition : 0;
 
         logger.debug(
           { channelId, startIndex },
           'Starting from explicit index (active streaming transition)'
         );
       } else {
-        // No explicit index, use current channel index or 0
-        actualStartIndex = channel.getMetadata().currentIndex ?? 0;
-        seekToSeconds = 0;
+        // No explicit index - try to sync with EPG even if not paused
+        // This ensures channel stays in sync with EPG schedule
+        try {
+          const epgPosition = await this.epgService.getCurrentPlaybackPosition(channel, media);
+          if (epgPosition) {
+            const currentIndex = channel.getMetadata().currentIndex ?? 0;
+            const indexDiff = Math.abs(epgPosition.fileIndex - currentIndex);
+            const wrappedDiff = Math.min(indexDiff, media.length - indexDiff);
+            
+            // If we're more than 1 file off from EPG, sync to EPG position
+            if (wrappedDiff > 1) {
+              actualStartIndex = epgPosition.fileIndex;
+              seekToSeconds = epgPosition.seekPosition;
+              logger.info(
+                {
+                  channelId,
+                  currentIndex,
+                  epgIndex: epgPosition.fileIndex,
+                  indexDiff: wrappedDiff,
+                  source: 'EPG sync (out of sync)',
+                },
+                'Channel out of sync with EPG, syncing to EPG position'
+              );
+            } else {
+              // Close enough - use current index
+              actualStartIndex = channel.getMetadata().currentIndex ?? 0;
+              seekToSeconds = 0;
+            }
+          } else {
+            // EPG unavailable - use current index
+            actualStartIndex = channel.getMetadata().currentIndex ?? 0;
+            seekToSeconds = 0;
+          }
+        } catch (epgError) {
+          // EPG failed - use current index
+          logger.debug({ channelId, error: epgError }, 'EPG sync failed, using current index');
+          actualStartIndex = channel.getMetadata().currentIndex ?? 0;
+          seekToSeconds = 0;
+        }
       }
 
       // Initialize virtual timeline if it doesn't exist
@@ -894,29 +932,57 @@ export class ChannelService {
           }
 
           let nextIndex: number;
+          let nextSeekPosition: number | undefined;
 
           // EPG as single source of truth - try EPG first
+          // Use getCurrentPlaybackPosition which correctly calculates position based on current program
           try {
-            const epgFileIndex = await this.epgService.getCurrentFileIndexFromEPG(
+            const epgPosition = await this.epgService.getCurrentPlaybackPosition(
               currentChannel,
               currentMedia
             );
 
-            if (epgFileIndex !== null) {
-              // EPG determined what should be playing - use it
-              nextIndex = epgFileIndex;
+            if (epgPosition) {
+              // EPG determined what should be playing - use it for file selection
+              nextIndex = epgPosition.fileIndex;
               
-              logger.info(
-                {
-                  channelId,
-                  currentIndex: currentChannel.getMetadata().currentIndex,
-                  nextIndex,
-                  nextFile: currentMedia[nextIndex]?.filename,
-                  source: 'EPG',
-                  mediaListChanged,
-                },
-                'Current file finished, transitioning to next file based on EPG schedule (single source of truth)'
-              );
+              // Check if we're significantly off from EPG (more than 1 file difference)
+              const currentIndex = currentChannel.getMetadata().currentIndex;
+              const indexDiff = Math.abs(nextIndex - currentIndex);
+              const wrappedDiff = Math.min(indexDiff, currentMedia.length - indexDiff);
+              
+              if (wrappedDiff > 1) {
+                // Channel is significantly out of sync - use EPG seek position to catch up
+                // This handles cases where the channel has drifted far from the schedule
+                nextSeekPosition = epgPosition.seekPosition;
+                logger.warn(
+                  {
+                    channelId,
+                    currentIndex,
+                    epgIndex: nextIndex,
+                    epgSeekPosition: nextSeekPosition,
+                    indexDiff: wrappedDiff,
+                    currentFile: currentMedia[currentIndex]?.filename,
+                    epgFile: currentMedia[nextIndex]?.filename,
+                  },
+                  'Channel is significantly out of sync with EPG - syncing to EPG position (including seek)'
+                );
+              } else {
+                // Normal transition - use EPG to determine which file, but start from beginning
+                // This ensures seamless playback: end of previous show flows to start of next
+                nextSeekPosition = 0;
+                logger.info(
+                  {
+                    channelId,
+                    currentIndex: currentChannel.getMetadata().currentIndex,
+                    nextIndex,
+                    nextFile: currentMedia[nextIndex]?.filename,
+                    source: 'EPG (seamless transition)',
+                    mediaListChanged,
+                  },
+                  'Current file finished, transitioning to next file based on EPG schedule (seamless - starting from beginning)'
+                );
+              }
             } else {
               // EPG unavailable - fall back to existing logic
               throw new Error('EPG unavailable, using fallback logic');
@@ -1224,9 +1290,12 @@ export class ChannelService {
             await new Promise((resolve) => setTimeout(resolve, 500));
 
             // Start next file (bumper has finished)
-            logger.info({ channelId, nextIndex, nextFile: nextFile.filename }, 'Starting next file after bumper');
+            logger.info(
+              { channelId, nextIndex, seekPosition: nextSeekPosition, nextFile: nextFile.filename },
+              'Starting next file after bumper'
+            );
 
-            await this.startChannel(channelId, nextIndex);
+            await this.startChannel(channelId, nextIndex, nextSeekPosition);
 
             // Transition point for discontinuity tag injection is recorded automatically
             // when FFmpeg starts and detects a transition (first new segment written)
@@ -1243,7 +1312,7 @@ export class ChannelService {
             logger.error({ error, channelId, stack: error instanceof Error ? error.stack : undefined }, 'CRITICAL: Transition failed, attempting recovery');
             // Fallback: try to start next file
             try {
-              await this.startChannel(channelId, nextIndex);
+              await this.startChannel(channelId, nextIndex, nextSeekPosition);
               logger.info({ channelId }, 'Recovery startChannel succeeded');
             } catch (recoveryError) {
               logger.error({ error: recoveryError, channelId }, 'FATAL: Recovery startChannel also failed');
@@ -1278,6 +1347,31 @@ export class ChannelService {
           { channelId, transitionSegment: transitionPoint },
           'Recorded transition point for discontinuity tag injection'
         );
+      } else {
+        // Fallback: If no transition point was recorded (e.g., waitForStreamStart timed out),
+        // but we detected this was a transition, try to read the playlist and detect the first new segment
+        // This is a best-effort fallback to handle timing issues
+        const playlistPath = path.join(streamConfig.outputDir, 'stream.m3u8');
+        try {
+          const playlistContent = await fs.readFile(playlistPath, 'utf-8');
+          const allSegments = Array.from(playlistContent.matchAll(/stream_(\d+)\.ts/g));
+          if (allSegments.length > 0) {
+            // Try to infer transition point from playlist content
+            // This is less reliable but better than missing the transition entirely
+            const lastSegmentNumber = parseInt(allSegments[allSegments.length - 1][1], 10);
+            // Record a transition point slightly ahead to ensure we catch it
+            // This is a heuristic - the actual segment might be different
+            logger.debug(
+              { channelId, inferredSegment: lastSegmentNumber + 1 },
+              'No transition point recorded during startup, inferred from playlist (fallback)'
+            );
+            // Note: We don't record this as it's unreliable - better to miss than inject incorrectly
+            // The main fix should be ensuring waitForStreamStart properly records transition points
+          }
+        } catch (error) {
+          // Playlist might not exist yet, that's OK
+          logger.debug({ channelId, error }, 'Could not read playlist for fallback transition detection');
+        }
       }
       
       // NOTE: We do NOT set the next segment number here!

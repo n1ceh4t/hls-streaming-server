@@ -637,15 +637,17 @@ export class FFmpegEngine {
           if (newSegments >= 1) {
             // Record transition point for discontinuity tag injection
             // Parse actual segment numbers to find the first new segment
-            const allSegments = content.match(/stream_(\d+)\.ts/g) || [];
-            if (allSegments.length > baselineCount && channelId) {
-              const firstNewSegmentMatch = allSegments[baselineCount].match(/stream_(\d+)\.ts/);
-              if (firstNewSegmentMatch) {
+            // Use a more robust approach: find all segment numbers and identify the first new one
+            const allSegmentMatches = Array.from(content.matchAll(/stream_(\d+)\.ts/g));
+            if (allSegmentMatches.length > baselineCount && channelId) {
+              // The first new segment is at index baselineCount
+              const firstNewSegmentMatch = allSegmentMatches[baselineCount];
+              if (firstNewSegmentMatch && firstNewSegmentMatch[1]) {
                 const firstNewSegmentNumber = parseInt(firstNewSegmentMatch[1], 10);
                 // Store transition info to be retrieved by caller
                 this.pendingTransitionPoints.set(channelId, firstNewSegmentNumber);
                 logger.debug(
-                  { channelId, firstNewSegmentNumber, baselineCount, totalSegments: allSegments.length },
+                  { channelId, firstNewSegmentNumber, baselineCount, totalSegments: allSegmentMatches.length },
                   'Recorded transition point for discontinuity tag injection'
                 );
               }
