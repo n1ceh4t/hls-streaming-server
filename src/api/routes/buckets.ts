@@ -2,10 +2,19 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { MediaBucketService } from '../../services/bucket/MediaBucketService';
 import { AuthService } from '../../services/auth/AuthService';
 import { authenticate } from '../middleware/auth';
+import { ChannelService } from '../../services/channel/ChannelService';
+import { EPGService } from '../../services/epg/EPGService';
+import { createLogger } from '../../utils/logger';
 
+const logger = createLogger('BucketRoutes');
 const router = Router();
 
-export const createBucketRoutes = (bucketService: MediaBucketService, authService?: AuthService) => {
+export const createBucketRoutes = (
+  bucketService: MediaBucketService,
+  authService?: AuthService,
+  channelService?: ChannelService,
+  epgService?: EPGService
+) => {
   const requireAuth = authenticate(authService);
   /**
    * GET /api/buckets
@@ -172,6 +181,24 @@ export const createBucketRoutes = (bucketService: MediaBucketService, authServic
 
       await bucketService.addMediaToBucket(req.params.bucketId, mediaFileIds);
 
+      // Invalidate cache for all channels using this bucket
+      if (channelService && epgService) {
+        try {
+          const channelIds = await bucketService.getChannelsForBucket(req.params.bucketId);
+          logger.info(
+            { bucketId: req.params.bucketId, channelIds, addedCount: mediaFileIds.length },
+            'Invalidating cache for channels using modified bucket'
+          );
+          
+          for (const channelId of channelIds) {
+            channelService.invalidateChannelMediaCache(channelId);
+            await epgService.invalidateCache(channelId);
+          }
+        } catch (error) {
+          logger.warn({ error, bucketId: req.params.bucketId }, 'Failed to invalidate cache after adding media to bucket');
+        }
+      }
+
       return res.json({
         success: true,
         message: `Added ${mediaFileIds.length} media file(s) to bucket`,
@@ -188,6 +215,24 @@ export const createBucketRoutes = (bucketService: MediaBucketService, authServic
   router.delete('/api/buckets/:bucketId/media/:mediaFileId', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
     try {
       await bucketService.removeMediaFromBucket(req.params.bucketId, req.params.mediaFileId);
+
+      // Invalidate cache for all channels using this bucket
+      if (channelService && epgService) {
+        try {
+          const channelIds = await bucketService.getChannelsForBucket(req.params.bucketId);
+          logger.info(
+            { bucketId: req.params.bucketId, channelIds, removedMediaId: req.params.mediaFileId },
+            'Invalidating cache for channels using modified bucket'
+          );
+          
+          for (const channelId of channelIds) {
+            channelService.invalidateChannelMediaCache(channelId);
+            await epgService.invalidateCache(channelId);
+          }
+        } catch (error) {
+          logger.warn({ error, bucketId: req.params.bucketId }, 'Failed to invalidate cache after removing media from bucket');
+        }
+      }
 
       return res.json({
         success: true,
@@ -217,6 +262,24 @@ export const createBucketRoutes = (bucketService: MediaBucketService, authServic
       }
 
       await bucketService.reorderMedia(req.params.bucketId, mediaFileIds);
+
+      // Invalidate cache for all channels using this bucket
+      if (channelService && epgService) {
+        try {
+          const channelIds = await bucketService.getChannelsForBucket(req.params.bucketId);
+          logger.info(
+            { bucketId: req.params.bucketId, channelIds, reorderedCount: mediaFileIds.length },
+            'Invalidating cache for channels using reordered bucket'
+          );
+          
+          for (const channelId of channelIds) {
+            channelService.invalidateChannelMediaCache(channelId);
+            await epgService.invalidateCache(channelId);
+          }
+        } catch (error) {
+          logger.warn({ error, bucketId: req.params.bucketId }, 'Failed to invalidate cache after reordering bucket media');
+        }
+      }
 
       return res.json({
         success: true,

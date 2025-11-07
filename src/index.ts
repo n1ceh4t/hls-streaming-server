@@ -201,7 +201,7 @@ class Application {
     this.app.use('/api/channels', createChannelRoutes(this.channelService, this.authService, this.libraryService, this.bucketService));
 
     // Media bucket routes
-    this.app.use('/', createBucketRoutes(this.bucketService, this.authService));
+    this.app.use('/', createBucketRoutes(this.bucketService, this.authService, this.channelService, this.epgService));
 
     // Library and media routes
     this.app.use('/', createLibraryRoutes(this.libraryService, this.authService));

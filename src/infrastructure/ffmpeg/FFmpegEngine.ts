@@ -35,8 +35,7 @@ export interface StreamHandle {
 export class FFmpegEngine {
   private activeStreams: Map<string, StreamHandle> = new Map();
   // With append_list flag: FFmpeg automatically manages segment numbering from existing playlist
-  // Track pending transition points (channelId -> segmentNumber) for discontinuity tag injection
-  private pendingTransitionPoints: Map<string, number> = new Map();
+  // With discont_start flag: FFmpeg automatically adds EXT-X-DISCONTINUITY tags at transitions
 
   /**
    * Start HLS streaming for a channel (one file at a time)
@@ -212,81 +211,64 @@ export class FFmpegEngine {
     bumperSegmentPath: string,
     streamConfig: StreamConfig
   ): Promise<void> {
-    logger.info({ channelId, bumperPath: bumperSegmentPath }, 'Starting bumper stream (fresh start)');
+    logger.info({ channelId, bumperPath: bumperSegmentPath }, 'Starting bumper stream (stream copy mode)');
 
     // Ensure output directory exists
     await fs.mkdir(streamConfig.outputDir, { recursive: true });
 
+    const outputPattern = path.join(streamConfig.outputDir, 'stream');
+    const playlistPath = `${outputPattern}.m3u8`;
+
     return new Promise((resolve, reject) => {
-      const outputPattern = path.join(streamConfig.outputDir, 'stream');
-      const playlistPath = `${outputPattern}.m3u8`;
-
-      // Parse resolution
-      const [width, height] = streamConfig.resolution.split('x').map(Number);
-
-      // Calculate display aspect ratio
-      const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
-      const divisor = gcd(width, height);
-      const darWidth = width / divisor;
-      const darHeight = height / divisor;
-
       const command = ffmpeg(bumperSegmentPath);
 
-      // No input seeking for bumper - play from start
+      // CRITICAL: Use stream copy mode - bumper is already encoded!
+      // Pre-generated bumpers are already perfect HLS segments, no re-encoding needed
       command.inputOptions([
         '-fflags', '+genpts+igndts',
         '-avoid_negative_ts', 'make_zero',
+        '-re', // CRITICAL: Real-time mode to maintain proper timing
       ]);
 
-      command.videoCodec('libx264');
-      command.audioCodec('aac');
-      command.fps(streamConfig.fps);
+      // Stream copy - no re-encoding (bumper is already perfectly encoded)
+      command.videoCodec('copy');
+      command.audioCodec('copy');
 
       command.outputOptions([
-        '-preset', 'ultrafast', // Fast preset for bumpers (short duration)
-        '-pix_fmt', 'yuv420p',
-
-        // Video filter - scale and set aspect ratio
-        '-vf', `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p,setdar=${darWidth}/${darHeight}`,
-
-        // HLS Output
+        // HLS Output - stream copy mode (no re-encoding parameters needed)
         '-f', 'hls',
         '-hls_time', streamConfig.segmentDuration.toString(),
-        '-hls_list_size', '10', // Keep 10 segments (bumper is short, but consistent)
-        // Continuous streaming: append_list maintains MEDIA-SEQUENCE across file?bumper?file transitions
-        '-hls_flags', 'append_list+delete_segments+program_date_time+independent_segments+omit_endlist+discont_start',
+        '-hls_list_size', '30', // Match main streaming (30 segments)
+        // Continuous streaming: append_list maintains MEDIA-SEQUENCE across file→bumper→file transitions
+        // discont_start: FFmpeg automatically adds EXT-X-DISCONTINUITY tags at bumper transitions
+        '-hls_flags', 'append_list+discont_start+delete_segments+program_date_time+independent_segments+omit_endlist',
         // No -start_number: FFmpeg automatically continues from last segment
         '-hls_segment_filename', `${outputPattern}_%03d.ts`,
         '-hls_segment_type', 'mpegts',
-        '-bsf:v', 'h264_mp4toannexb',
-
-        // Audio
-        '-b:a', streamConfig.audioBitrate.toString(),
-        '-ac', '2',
-        '-ar', '48000',
-
-        // Video bitrate
-        '-b:v', streamConfig.videoBitrate.toString(),
-        '-maxrate', Math.floor(streamConfig.videoBitrate * 2).toString(),
-        '-bufsize', Math.floor(streamConfig.videoBitrate * 2).toString(),
-
-        // Keyframes
-        '-force_key_frames', `expr:gte(t,n_forced*${streamConfig.segmentDuration})`,
-        '-g', (streamConfig.fps * 2).toString(),
-        '-keyint_min', (streamConfig.fps * 2).toString(),
-        '-fps_mode', 'cfr',
+        '-bsf:v', 'h264_mp4toannexb', // Still need bitstream filter for HLS
 
         '-y' // Overwrite output files
       ]);
 
       command.output(playlistPath);
 
-      command.on('start', (commandLine) => {
-        logger.debug({ channelId, command: commandLine }, 'Bumper FFmpeg command');
+      command.on('start', async (commandLine) => {
+        logger.debug({ channelId, command: commandLine }, 'Bumper FFmpeg command (stream copy mode)');
+        
+        // CRITICAL: Wait for bumper to start writing segments, then detect transition point
+        // This avoids race condition of predicting segment numbers
+        // Wait for bumper stream to start
+        // FFmpeg's discont_start flag will automatically add discontinuity tags
+        try {
+          await this.waitForStreamStart(streamConfig.outputDir, 5000, true, channelId);
+          logger.info({ channelId }, 'Bumper stream started (FFmpeg handles discontinuity tags automatically)');
+        } catch (error) {
+          logger.warn({ channelId, error }, 'Failed to detect bumper start (bumper may be very short)');
+        }
       });
 
       command.on('end', () => {
-        logger.info({ channelId }, 'Bumper stream finished');
+        logger.info({ channelId }, 'Bumper stream finished (stream copy mode)');
         resolve();
       });
 
@@ -313,31 +295,6 @@ export class FFmpegEngine {
     return this.activeStreams.get(channelId);
   }
 
-  /**
-   * Get and clear pending transition point for a channel
-   * 
-   * Called after stream start to record where discontinuity tags should be injected.
-   * Returns the segment number where transition occurred, or undefined if none.
-   * 
-   * @param channelId - Channel ID
-   * @returns Segment number where transition occurred, or undefined
-   */
-  public getAndClearTransitionPoint(channelId: string): number | undefined {
-    const segmentNumber = this.pendingTransitionPoints.get(channelId);
-    if (segmentNumber !== undefined) {
-      this.pendingTransitionPoints.delete(channelId);
-    }
-    return segmentNumber;
-  }
-
-  /**
-   * Set segment number - NOT USED with append_list (FFmpeg manages automatically)
-   * Kept for API compatibility only
-   */
-  public setSegmentNumber(channelId: string, _segmentNumber: number): void {
-    // With append_list: No-op, FFmpeg reads playlist and continues automatically
-    logger.debug({ channelId, note: 'Segment number not tracked with append_list' }, 'setSegmentNumber called (no-op)');
-  }
 
   /**
    * Create FFmpeg command for HLS streaming (single file mode)
@@ -428,16 +385,18 @@ export class FFmpegEngine {
         // HLS Output Settings
         '-f', 'hls',
         '-hls_time', streamConfig.segmentDuration.toString(),
-        // Keep 10 segments in playlist (beta approach)
-        '-hls_list_size', '10',
+        // Keep 30 segments in playlist (~3 minutes at 6s/segment) to prevent premature deletion
+        // CRITICAL: Players (especially Roku) may buffer/lag behind FFmpeg generation
+        // Larger window prevents 410 Gone errors during transitions and normal playback
+        '-hls_list_size', '30',
         // Continuous streaming flags with append_list for seamless transitions:
         // append_list: Append new segments to existing playlist (maintains MEDIA-SEQUENCE continuity)
-        // delete_segments: Auto-clean old segments (sliding window)
-        // discont_start: Auto-mark discontinuity at file transitions
+        // delete_segments: Auto-clean old segments (sliding window) - safe with 30-segment buffer
         // independent_segments: Better player compatibility
         // program_date_time: Include timestamps for sync
         // omit_endlist: Keep stream open (no #EXT-X-ENDLIST)
-        '-hls_flags', 'append_list+independent_segments+program_date_time+delete_segments+omit_endlist+discont_start',
+        // discont_start: FFmpeg automatically adds EXT-X-DISCONTINUITY tags at file transitions (built-in!)
+        '-hls_flags', 'append_list+discont_start+independent_segments+program_date_time+delete_segments+omit_endlist',
         // No -start_number: FFmpeg automatically continues from last segment in existing playlist
         '-hls_segment_filename', segmentPattern,
         '-hls_segment_type', 'mpegts',
@@ -595,16 +554,25 @@ export class FFmpegEngine {
     const playlistPath = path.join(outputDir, 'stream.m3u8');
     const startTime = Date.now();
 
-    // Get baseline segment count before FFmpeg starts (for transitions)
-    // This matches the old server's approach - track segment count growth
-    let baselineCount = 0;
+    // Get baseline last segment NUMBER before FFmpeg starts (for transitions)
+    // CRITICAL: Track segment NUMBER, not count! hls_list_size=30 keeps count constant!
+    let baselineLastSegment = -1;
     if (isTransition) {
       try {
         const baselineContent = await fs.readFile(playlistPath, 'utf-8');
-        baselineCount = (baselineContent.match(/stream_\d+\.ts/g) || []).length;
-        logger.debug({ channelId: channelId || 'unknown', baselineCount }, 'Baseline segment count before transition');
+        const segments = baselineContent.match(/stream_(\d+)\.ts/g) || [];
+        if (segments.length > 0) {
+          const lastSegMatch = segments[segments.length - 1].match(/stream_(\d+)\.ts/);
+          if (lastSegMatch) {
+            baselineLastSegment = parseInt(lastSegMatch[1], 10);
+          }
+        }
+        logger.debug(
+          { channelId: channelId || 'unknown', baselineLastSegment, segmentCount: segments.length },
+          'Baseline last segment number before transition (tracking number, not count)'
+        );
       } catch {
-        // Playlist doesn't exist or can't be read, baseline stays 0
+        // Playlist doesn't exist or can't be read, baseline stays -1
       }
     }
 
@@ -616,54 +584,47 @@ export class FFmpegEngine {
       try {
         await fs.access(playlistPath);
 
-        // For transitions, verify that segments are growing (matching old server approach)
+        // For transitions, verify that last segment NUMBER is increasing
+        // CRITICAL: Track segment number, not count! hls_list_size=30 keeps count constant!
         if (isTransition) {
           const content = await fs.readFile(playlistPath, 'utf-8');
-          const totalSegmentCount = (content.match(/stream_\d+\.ts/g) || []).length;
-
-          // If segment count dropped below baseline, FFmpeg started fresh playlist (overwrote it)
-          // Reset baseline to current count and wait for growth
-          if (totalSegmentCount < baselineCount) {
-            logger.debug(
-              { channelId: channelId || 'unknown', totalSegmentCount, baselineCount },
-              'Detected fresh playlist (count < baseline), resetting baseline'
-            );
-            baselineCount = totalSegmentCount;
-          }
-
-          const newSegments = Math.max(0, totalSegmentCount - baselineCount);
-
-          // Need at least 1 new segment to confirm stream is generating (reduced for faster transitions)
-          if (newSegments >= 1) {
-            // Record transition point for discontinuity tag injection
-            // Parse actual segment numbers to find the first new segment
-            // Use a more robust approach: find all segment numbers and identify the first new one
-            const allSegmentMatches = Array.from(content.matchAll(/stream_(\d+)\.ts/g));
-            if (allSegmentMatches.length > baselineCount && channelId) {
-              // The first new segment is at index baselineCount
-              const firstNewSegmentMatch = allSegmentMatches[baselineCount];
-              if (firstNewSegmentMatch && firstNewSegmentMatch[1]) {
-                const firstNewSegmentNumber = parseInt(firstNewSegmentMatch[1], 10);
-                // Store transition info to be retrieved by caller
-                this.pendingTransitionPoints.set(channelId, firstNewSegmentNumber);
-                logger.debug(
-                  { channelId, firstNewSegmentNumber, baselineCount, totalSegments: allSegmentMatches.length },
-                  'Recorded transition point for discontinuity tag injection'
-                );
+          const allSegments = content.match(/stream_(\d+)\.ts/g) || [];
+          
+          if (allSegments.length > 0) {
+            // Get current last segment number
+            const lastSegMatch = allSegments[allSegments.length - 1].match(/stream_(\d+)\.ts/);
+            if (lastSegMatch) {
+              const currentLastSegment = parseInt(lastSegMatch[1], 10);
+              
+              // If last segment number increased, transition occurred!
+              if (currentLastSegment > baselineLastSegment) {
+                // Find the first NEW segment (first one after baseline)
+                // This is where we inject the discontinuity tag
+                let firstNewSegmentNumber = baselineLastSegment + 1;
+                
+                // Verify this segment actually exists in the playlist
+                const hasNewSegment = allSegments.some(seg => {
+                  const match = seg.match(/stream_(\d+)\.ts/);
+                  return match && parseInt(match[1], 10) === firstNewSegmentNumber;
+                });
+                
+                if (hasNewSegment && channelId) {
+                  // Transition detected - FFmpeg's discont_start flag will handle discontinuity tags automatically
+                  logger.info(
+                    { 
+                      channelId, 
+                      firstNewSegmentNumber, 
+                      baselineLastSegment,
+                      currentLastSegment,
+                      totalSegments: allSegments.length,
+                      elapsed: Date.now() - startTime
+                    },
+                    'Transition complete: new segment detected (tracked by number, not count)'
+                  );
+                  return true;
+                }
               }
             }
-            
-            logger.info(
-              {
-                channelId: channelId || 'unknown',
-                totalSegmentCount,
-                baselineCount,
-                newSegments,
-                elapsed: Date.now() - startTime
-              },
-              'Transition complete: new segments detected'
-            );
-            return true;
           }
 
           // Wait a bit before next check

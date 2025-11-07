@@ -1187,9 +1187,35 @@ export class EPGService {
     const timeMinutes = time.getHours() * 60 + time.getMinutes();
 
     // Find blocks that match this time (handles midnight wraparound)
+    // CRITICAL: Also check blocks for the previous day (for blocks ending at 00:00:00)
+    // and next day (for blocks starting at 00:00:00)
+    const previousDay = (dayOfWeek - 1 + 7) % 7; // Previous day (wraps around)
+    const nextDay = (dayOfWeek + 1) % 7; // Next day (wraps around)
+    
     const matchingBlocks = allBlocks.filter(block => {
-      // Check day of week
-      if (block.day_of_week !== null && !block.day_of_week.includes(dayOfWeek)) {
+      // Check day of week - need to check current day, previous day (for blocks ending at 00:00),
+      // and next day (for blocks starting at 00:00)
+      let dayMatches = false;
+      if (block.day_of_week === null) {
+        // Block applies to all days
+        dayMatches = true;
+      } else {
+        // Check if block applies to current day
+        if (block.day_of_week.includes(dayOfWeek)) {
+          dayMatches = true;
+        }
+        // Also check previous day if we're at 00:00:00 (block might have started yesterday)
+        if (timeMinutes === 0 && block.day_of_week.includes(previousDay)) {
+          dayMatches = true;
+        }
+        // Also check next day if we're close to midnight (block might start at 00:00:00 tomorrow)
+        // Actually, if we're checking at 23:59, we should check tomorrow's blocks that start at 00:00
+        if (timeMinutes >= 23 * 60 && block.day_of_week.includes(nextDay)) {
+          dayMatches = true;
+        }
+      }
+      
+      if (!dayMatches) {
         return false;
       }
       
@@ -1463,6 +1489,69 @@ export class EPGService {
       return null; // No program currently airing
     }
 
+    // CRITICAL: For dynamic playlists, we need to use the program's schedule block's media
+    // Even if there's no active block at the current time, if the program is airing,
+    // we should use the media from the program's original schedule block
+    if (channel.config.useDynamicPlaylist && this.playlistResolver) {
+      try {
+        // Get the schedule block that was active when this program started
+        // This is the block whose media we should use
+        const programStartBlock = await this.scheduleRepository.getActiveBlock(channel.id, currentProgram.startTime);
+        
+        // Check what schedule block is active NOW (for logging only)
+        const currentActiveBlock = await this.scheduleRepository.getActiveBlock(channel.id, now);
+        
+        const currentBlockId = currentActiveBlock?.id || null;
+        const programBlockId = programStartBlock?.id || null;
+        
+        // If the program's block doesn't exist, we can't determine the correct media
+        if (!programStartBlock) {
+          logger.warn(
+            {
+              channelId: channel.id,
+              currentTime: now.toISOString(),
+              programStartTime: currentProgram.startTime.toISOString(),
+              programTitle: currentProgram.info.title,
+            },
+            'Program\'s original schedule block not found - cannot determine correct media list'
+          );
+          // Don't return null here - let it continue and use the mediaFiles parameter
+          // This handles edge cases where schedule blocks were deleted
+        } else if (currentBlockId !== programBlockId) {
+          // Blocks don't match - this is expected when a program spans across schedule block boundaries
+          // or when there's no active block at the current time but the program is still airing
+          logger.info(
+            {
+              channelId: channel.id,
+              currentTime: now.toISOString(),
+              programStartTime: currentProgram.startTime.toISOString(),
+              currentActiveBlockId: currentBlockId,
+              programBlockId: programBlockId,
+              programTitle: currentProgram.info.title,
+            },
+            'Program is from a different schedule block than currently active (or no active block) - will use program\'s original block media'
+          );
+          // Continue - we'll use the program's original block media below
+        } else {
+          logger.debug(
+            {
+              channelId: channel.id,
+              currentBlockId,
+              programBlockId,
+              programTitle: currentProgram.info.title,
+            },
+            'Program matches currently active schedule block'
+          );
+        }
+      } catch (error) {
+        logger.warn(
+          { error, channelId: channel.id },
+          'Failed to validate schedule block for current program, continuing anyway'
+        );
+        // Continue - better to play something than nothing if validation fails
+      }
+    }
+
     // Calculate how far into the current program we are (in seconds)
     const elapsedInProgram = Math.floor((now.getTime() - currentProgram.startTime.getTime()) / 1000);
     const elapsedInProgramSeconds = Math.max(0, elapsedInProgram);
@@ -1518,53 +1607,102 @@ export class EPGService {
       }
     }
 
-    // EPG is the single source of truth - get the starting position EPG used when generating programs
-    // This is the position at EPG generation time (when programs[0].startTime was set)
-    const epgStartTime = programs[0]?.startTime || now;
-    const virtualPosition = this.virtualTimeService.calculateCurrentVirtualPosition(
-      virtualTime,
-      actualMediaFiles,
-      epgStartTime  // Use EPG generation time to get starting position
-    );
-
-    let fileIndex = virtualPosition.currentIndex;
-    let initialPositionInFile = virtualPosition.positionInFile;
-
-    // Find which program index we're on (programs are generated sequentially)
+    // CRITICAL: Use the same mapping logic that EPG uses to ensure consistency
+    // This ensures the file index matches what EPG actually generated
     const currentProgramIndex = programs.indexOf(currentProgram);
-    
-    // Calculate file offset: each program (except potentially the first partial one) corresponds to one file
-    // If first program was partial, we're still in the starting file for program 0
-    // Programs are generated sequentially, so program N corresponds to fileIndex + N (with wrapping)
-    let fileOffset = 0;
-    if (currentProgramIndex === 0 && initialPositionInFile > 0) {
-      // We're on the first program which is partial - still in the same file
-      fileOffset = 0;
-    } else {
-      // We're on a later program - count how many files we've advanced
-      // If first was partial, we advanced by (currentProgramIndex) files
-      // If first was full, we advanced by (currentProgramIndex) files
-      fileOffset = currentProgramIndex;
+    if (currentProgramIndex === -1) {
+      logger.warn({ channelId: channel.id }, 'Current program not found in programs array');
+      return null;
     }
 
-    fileIndex = (virtualPosition.currentIndex + fileOffset) % actualMediaFiles.length;
+    // Use the same mapProgramIndexToFileIndex method that getCurrentFileIndexFromEPG uses
+    // This ensures consistency between EPG display and actual playback
+    const fileIndex = await this.mapProgramIndexToFileIndex(
+      currentProgramIndex,
+      programs,
+      actualMediaFiles,
+      channel
+    );
+
+    logger.info(
+      {
+        channelId: channel.id,
+        currentProgramIndex,
+        fileIndex,
+        programTitle: currentProgram.info.title,
+        programStartTime: currentProgram.startTime.toISOString(),
+        programEndTime: currentProgram.endTime.toISOString(),
+        elapsedInProgramSeconds,
+        actualMediaFilesCount: actualMediaFiles.length,
+        fileAtIndex: actualMediaFiles[fileIndex]?.filename,
+      },
+      'EPG getCurrentPlaybackPosition: Mapped program to file index using same logic as EPG generation'
+    );
 
     // Calculate seek position within the current file
+    // For the first program, if it's partial, we need to account for the initial position
     let seekPosition: number;
-    if (currentProgramIndex === 0 && initialPositionInFile > 0) {
-      // First program is partial - add elapsed time to initial position
-      seekPosition = initialPositionInFile + elapsedInProgramSeconds;
+    
+    if (currentProgramIndex === 0) {
+      // First program - check if it's partial
+      const firstProgramDuration = programs[0].duration;
+      const startFile = actualMediaFiles[fileIndex];
+      const firstFileDuration = startFile?.metadata?.duration || 0;
+      
+      if (firstFileDuration > 0 && firstProgramDuration < firstFileDuration) {
+        // First program is partial - we need to calculate the initial position
+        // Get virtual position at EPG start time to find where we started in the file
+        const epgStartTime = programs[0]?.startTime || now;
+        const virtualPosition = this.virtualTimeService.calculateCurrentVirtualPosition(
+          virtualTime,
+          actualMediaFiles,
+          epgStartTime
+        );
+        const initialPositionInFile = virtualPosition.positionInFile;
+        // Add elapsed time to initial position
+        seekPosition = initialPositionInFile + elapsedInProgramSeconds;
+      } else {
+        // First program is full - elapsed time is the seek position
+        seekPosition = elapsedInProgramSeconds;
+      }
     } else {
-      // Full program - elapsed time is the seek position
+      // Later program - elapsed time is the seek position (programs start at beginning of file)
       seekPosition = elapsedInProgramSeconds;
     }
 
-    // Check if we've exceeded the current file's duration
+    // Validate seek position doesn't exceed file duration
     const fileDuration = actualMediaFiles[fileIndex]?.metadata?.duration || 0;
     if (seekPosition >= fileDuration && fileDuration > 0) {
-      // Moved to next file
-      fileIndex = (fileIndex + 1) % actualMediaFiles.length;
-      seekPosition = 0;
+      // Moved to next file - this shouldn't happen if calculation is correct, but handle it
+      logger.warn(
+        {
+          channelId: channel.id,
+          fileIndex,
+          seekPosition,
+          fileDuration,
+          programIndex: currentProgramIndex,
+        },
+        'Seek position exceeds file duration, adjusting to next file'
+      );
+      // Use next program's file instead
+      if (currentProgramIndex + 1 < programs.length) {
+        const nextFileIndex = await this.mapProgramIndexToFileIndex(
+          currentProgramIndex + 1,
+          programs,
+          actualMediaFiles,
+          channel
+        );
+        return {
+          fileIndex: nextFileIndex,
+          seekPosition: 0,
+        };
+      } else {
+        // Wrap around
+        return {
+          fileIndex: (fileIndex + 1) % actualMediaFiles.length,
+          seekPosition: 0,
+        };
+      }
     }
 
     return {

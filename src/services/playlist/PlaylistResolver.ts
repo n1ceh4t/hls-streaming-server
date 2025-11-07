@@ -73,7 +73,96 @@ export class PlaylistResolver implements IPlaylistResolver {
     const lookupTime = context?.currentTime || new Date();
 
     // Check for active schedule block
-    const activeBlock = await this.scheduleRepository.getActiveBlock(channelId, lookupTime);
+    let activeBlock = await this.scheduleRepository.getActiveBlock(channelId, lookupTime);
+    
+    // CRITICAL: If getActiveBlock returns null, manually check all blocks
+    // This handles edge cases where getActiveBlock might miss a block due to timing issues
+    if (!activeBlock) {
+      const allBlocks = await this.scheduleRepository.getEnabledBlocksForChannel(channelId);
+      const dayOfWeek = lookupTime.getDay();
+      const lookupMinutes = lookupTime.getHours() * 60 + lookupTime.getMinutes();
+      
+      // Manually check each block to see if it should be active
+      for (const block of allBlocks) {
+        // Check day of week
+        const dayMatches = block.day_of_week === null || block.day_of_week.includes(dayOfWeek);
+        if (!dayMatches) continue;
+        
+        // Check time range (use same logic as getActiveBlock)
+        const [startH, startM, startS] = block.start_time.split(':').map(Number);
+        const [endH, endM, endS] = block.end_time.split(':').map(Number);
+        const startMinutes = startH * 60 + startM + (startS || 0) / 60;
+        const endMinutes = endH * 60 + endM + (endS || 0) / 60;
+        
+        let timeMatches = false;
+        if (endMinutes > startMinutes) {
+          // Normal case: 09:00-17:00
+          timeMatches = lookupMinutes >= startMinutes && lookupMinutes < endMinutes;
+        } else {
+          // Wraparound case: 23:00-01:00 (spans midnight)
+          timeMatches = lookupMinutes >= startMinutes || lookupMinutes < endMinutes;
+        }
+        
+        if (timeMatches) {
+          activeBlock = block;
+          logger.warn(
+            {
+              channelId,
+              blockId: block.id,
+              blockName: block.name,
+              lookupTime: lookupTime.toISOString(),
+              dayOfWeek,
+              lookupMinutes,
+              startTime: block.start_time,
+              endTime: block.end_time,
+              startMinutes,
+              endMinutes,
+            },
+            'Manually found active block that getActiveBlock missed - using it'
+          );
+          break;
+        }
+      }
+      
+      // If still no block found, log diagnostic info
+      if (!activeBlock) {
+        logger.warn({
+          channelId,
+          lookupTime: lookupTime.toISOString(),
+          dayOfWeek: lookupTime.getDay(),
+          timeStr: lookupTime.toTimeString().substring(0, 8),
+          hours: lookupTime.getHours(),
+          minutes: lookupTime.getMinutes(),
+          lookupMinutes,
+          totalEnabledBlocks: allBlocks.length,
+          blocksAtThisTime: allBlocks.map(b => {
+            const [sH, sM, sS] = b.start_time.split(':').map(Number);
+            const [eH, eM, eS] = b.end_time.split(':').map(Number);
+            const sMin = sH * 60 + sM + (sS || 0) / 60;
+            const eMin = eH * 60 + eM + (eS || 0) / 60;
+            const dayMatch = b.day_of_week === null || b.day_of_week.includes(dayOfWeek);
+            let timeMatch = false;
+            if (eMin > sMin) {
+              timeMatch = lookupMinutes >= sMin && lookupMinutes < eMin;
+            } else {
+              timeMatch = lookupMinutes >= sMin || lookupMinutes < eMin;
+            }
+            return {
+              name: b.name,
+              dayOfWeek: b.day_of_week,
+              startTime: b.start_time,
+              endTime: b.end_time,
+              bucketId: b.bucket_id,
+              enabled: b.enabled,
+              dayMatches: dayMatch,
+              timeMatches: timeMatch,
+              startMinutes: sMin,
+              endMinutes: eMin,
+            };
+          }),
+        }, 'No active schedule block found - diagnostic info');
+      }
+    }
     
     // Log what we found for debugging
     if (activeBlock) {
@@ -274,19 +363,47 @@ export class PlaylistResolver implements IPlaylistResolver {
     // TODO: Phase 3 - Check for content overrides
     // TODO: Phase 4 - Apply bucket prioritization/mixing
 
+    // Log before fetching media files
+    logger.info(
+      {
+        channelId,
+        mediaIdsCount: mediaIds.length,
+        sampleMediaIds: mediaIds.slice(0, 5),
+        activeBlock: activeBlock ? { name: activeBlock.name, bucketId: activeBlock.bucket_id } : null,
+      },
+      'About to fetch MediaFile objects from database'
+    );
+
     // Fetch full MediaFile objects
     const mediaFiles = await Promise.all(
       mediaIds.map(async (id: string) => {
-        const mfRow = await this.mediaFileRepository.findById(id);
-        if (mfRow) {
-          return MediaFileRepository.rowToMediaFile(mfRow);
+        try {
+          const mfRow = await this.mediaFileRepository.findById(id);
+          if (mfRow) {
+            return MediaFileRepository.rowToMediaFile(mfRow);
+          }
+          logger.warn({ channelId, mediaId: id }, 'Media file ID from bucket not found in database');
+          return null;
+        } catch (error) {
+          logger.error({ channelId, mediaId: id, error }, 'Error fetching media file from database');
+          return null;
         }
-        return null;
       })
     );
 
     const validFiles = mediaFiles.filter((f): f is MediaFile => f !== null);
     const missingMediaIds = mediaIds.filter((_id, index) => mediaFiles[index] === null);
+    
+    logger.info(
+      {
+        channelId,
+        mediaIdsCount: mediaIds.length,
+        validFilesCount: validFiles.length,
+        missingCount: missingMediaIds.length,
+        sampleMissingIds: missingMediaIds.slice(0, 5),
+      },
+      'Finished fetching MediaFile objects from database'
+    );
 
     if (validFiles.length === 0) {
       logger.warn(

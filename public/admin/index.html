@@ -38,11 +38,14 @@
             min-height: 100vh;
             line-height: 1.6;
             overflow-x: hidden;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .container {
             display: flex;
             min-height: 100vh;
+            overflow-x: hidden;
         }
 
         /* Sidebar */
@@ -54,6 +57,7 @@
             flex-direction: column;
             transition: width var(--transition);
             flex-shrink: 0;
+            overflow: hidden;
         }
 
         .sidebar.collapsed {
@@ -220,25 +224,34 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            max-width: 100%;
+            min-width: 0;
         }
 
         .content-header {
             padding: 20px 24px;
             background: var(--bg-secondary);
             border-bottom: 1px solid var(--border);
+            overflow: hidden;
         }
 
         .content-header h2 {
             color: var(--text-primary);
             font-size: 24px;
             font-weight: 700;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .content-body {
             flex: 1;
             padding: 24px;
             overflow-y: auto;
+            overflow-x: hidden;
             position: relative;
+            max-width: 100%;
         }
 
         .tab-content {
@@ -251,11 +264,17 @@
 
         /* Login Screen */
         .login-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
             display: flex;
             justify-content: center;
             align-items: center;
             min-height: 100vh;
             background: var(--bg-primary);
+            z-index: 1000;
         }
 
         .login-card {
@@ -265,6 +284,9 @@
             width: 100%;
             max-width: 420px;
             border: 1px solid var(--border);
+            overflow: hidden;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .login-card h1 {
@@ -371,6 +393,9 @@
             border-radius: var(--radius-lg);
             margin-bottom: 24px;
             border: 1px solid var(--border);
+            overflow: hidden;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .card h2 {
@@ -378,6 +403,14 @@
             margin-bottom: 20px;
             font-size: 20px;
             font-weight: 700;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .card * {
+            max-width: 100%;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .stats-grid {
@@ -385,6 +418,8 @@
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 16px;
             margin-bottom: 24px;
+            max-width: 100%;
+            overflow: hidden;
         }
 
         .stat-card {
@@ -392,6 +427,9 @@
             padding: 20px;
             border-radius: var(--radius-lg);
             border: 1px solid var(--border);
+            overflow: hidden;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .stat-card h3 {
@@ -401,12 +439,16 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         .stat-card .value {
             font-size: 32px;
             font-weight: 700;
             color: var(--text-primary);
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         table {
@@ -423,6 +465,11 @@
             padding: 12px 16px;
             text-align: left;
             border-bottom: 1px solid var(--border);
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
         }
 
         table th {
@@ -589,6 +636,8 @@
             background: var(--bg-secondary);
             color: var(--text-primary);
             font-family: inherit;
+            max-width: 100%;
+            box-sizing: border-box;
         }
 
         .form-group input:focus,
@@ -682,6 +731,14 @@
             border-radius: var(--radius-lg);
             border: 1px solid var(--border);
             color: var(--text-primary);
+            overflow: hidden;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .admin-modal-content * {
+            max-width: 100%;
+            box-sizing: border-box;
         }
 
         .admin-modal-header {
@@ -728,6 +785,447 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--bg-hover);
         }
+
+        /* Overflow Prevention - Critical for all content types */
+        pre, code {
+            overflow-x: auto;
+            max-width: 100%;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            white-space: pre-wrap;
+        }
+
+        a, span, div, p, h1, h2, h3, h4, h5, h6 {
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            overflow-wrap: anywhere;
+        }
+
+        img, video, iframe, embed, object {
+            max-width: 100%;
+            height: auto;
+        }
+
+        /* Prevent long URLs and text from overflowing */
+        .text-overflow-ellipsis {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .break-words {
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+
+        .break-all {
+            word-break: break-all;
+        }
+
+        /* ====================================
+           RESPONSIVE & MOBILE-FRIENDLY STYLES
+           ==================================== */
+
+        /* Mobile Menu Toggle Button (hidden on desktop) */
+        .mobile-menu-toggle {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1001;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            width: 44px;
+            height: 44px;
+            border-radius: var(--radius);
+            cursor: pointer;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            transition: var(--transition);
+        }
+
+        .mobile-menu-toggle:hover {
+            background: var(--bg-hover);
+        }
+
+        /* Tablet Styles (768px - 1024px) */
+        @media (max-width: 1024px) {
+            .content-body {
+                padding: 16px;
+            }
+
+            .content-header {
+                padding: 16px 20px;
+            }
+
+            .content-header h2 {
+                font-size: 20px;
+            }
+
+            .card {
+                padding: 20px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 12px;
+            }
+
+            .stat-card .value {
+                font-size: 28px;
+            }
+
+            /* Make tables scrollable horizontally on tablets */
+            .table-wrapper {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            table {
+                min-width: 600px;
+            }
+        }
+
+        /* Mobile Styles (max 768px) */
+        @media (max-width: 768px) {
+            /* Prevent horizontal overflow on mobile */
+            body, html {
+                overflow-x: hidden;
+                max-width: 100vw;
+            }
+
+            * {
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+
+            /* Show mobile menu toggle */
+            .mobile-menu-toggle {
+                display: flex;
+            }
+
+            /* Hide sidebar by default on mobile */
+            .sidebar {
+                position: fixed;
+                left: -280px;
+                top: 0;
+                bottom: 0;
+                width: 280px;
+                z-index: 1000;
+                transition: left 0.3s ease;
+                box-shadow: 2px 0 8px rgba(0, 0, 0, 0.3);
+            }
+
+            /* Show sidebar when active */
+            .sidebar.mobile-active {
+                left: 0;
+            }
+
+            /* Overlay when sidebar is open */
+            .sidebar-overlay {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 999;
+            }
+
+            .sidebar-overlay.active {
+                display: block;
+            }
+
+            /* Adjust main content */
+            .main-content {
+                width: 100%;
+                margin-left: 0;
+            }
+
+            /* Adjust content padding */
+            .content-body {
+                padding: 12px;
+            }
+
+            .content-header {
+                padding: 60px 12px 12px 12px; /* Extra top padding for mobile menu */
+            }
+
+            .content-header h2 {
+                font-size: 18px;
+            }
+
+            /* Login card mobile adjustments */
+            .login-card {
+                padding: 32px 24px;
+                margin: 16px;
+                max-width: 100%;
+            }
+
+            .login-card h1 {
+                font-size: 24px;
+            }
+
+            /* Stats grid - stack on mobile */
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+
+            .stat-card {
+                padding: 16px;
+            }
+
+            .stat-card h3 {
+                font-size: 10px;
+            }
+
+            .stat-card .value {
+                font-size: 24px;
+            }
+
+            /* Card adjustments */
+            .card {
+                padding: 16px;
+                margin-bottom: 16px;
+            }
+
+            .card h2 {
+                font-size: 18px;
+                margin-bottom: 16px;
+            }
+
+            /* Button adjustments */
+            .btn,
+            .btn-small {
+                width: 100%;
+                margin-bottom: 8px;
+                margin-right: 0;
+                max-width: 100%;
+                box-sizing: border-box;
+            }
+
+            /* Form adjustments */
+            .form-group {
+                margin-bottom: 16px;
+                max-width: 100%;
+            }
+
+            .form-group input,
+            .form-group select,
+            .form-group textarea {
+                font-size: 16px; /* Prevents zoom on iOS */
+                max-width: 100%;
+                box-sizing: border-box;
+                word-break: break-word;
+            }
+
+            /* Table responsiveness */
+            table {
+                display: block;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                white-space: nowrap;
+                max-width: 100%;
+            }
+
+            table th,
+            table td {
+                padding: 8px 12px;
+                font-size: 13px;
+                word-break: break-word;
+                overflow-wrap: break-word;
+            }
+
+            /* Ensure table wrapper contains overflow */
+            .table-wrapper {
+                overflow-x: auto;
+                max-width: 100%;
+            }
+
+            /* Modal adjustments */
+            .admin-modal {
+                padding: 10px;
+            }
+
+            .admin-modal-content {
+                margin: 20px auto;
+                padding: 20px;
+            }
+
+            .admin-modal-header h3 {
+                font-size: 18px;
+            }
+
+            /* Stream player adjustments */
+            .stream-player-container {
+                padding: 16px;
+            }
+
+            .video-player {
+                width: 100%;
+                height: auto;
+            }
+
+            /* Hide collapsed sidebar text on mobile */
+            .sidebar.collapsed {
+                width: 0;
+                left: -280px;
+            }
+        }
+
+        /* Small Mobile Styles (max 480px) */
+        @media (max-width: 480px) {
+            /* Stack stats vertically */
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+
+            /* Further reduce padding */
+            .content-body {
+                padding: 8px;
+            }
+
+            .card {
+                padding: 12px;
+            }
+
+            .login-card {
+                padding: 24px 16px;
+            }
+
+            /* Smaller buttons */
+            .btn,
+            .btn-small {
+                padding: 10px 16px;
+                font-size: 14px;
+            }
+
+            /* Smaller stat values */
+            .stat-card .value {
+                font-size: 20px;
+            }
+
+            /* Adjust modal for very small screens */
+            .admin-modal-content {
+                padding: 16px;
+            }
+
+            /* Smaller table text */
+            table th,
+            table td {
+                padding: 6px 8px;
+                font-size: 12px;
+            }
+
+            /* Adjust status badges */
+            .status-badge {
+                font-size: 10px;
+                padding: 3px 8px;
+            }
+        }
+
+        /* Landscape mobile orientation */
+        @media (max-height: 500px) and (orientation: landscape) {
+            .content-header {
+                padding: 12px 16px;
+            }
+
+            .sidebar {
+                width: 240px;
+                left: -260px;
+            }
+
+            .login-screen {
+                padding: 20px;
+                align-items: flex-start;
+            }
+
+            .login-card {
+                margin-top: 20px;
+            }
+        }
+
+        /* Touch-friendly adjustments for all mobile devices */
+        @media (hover: none) and (pointer: coarse) {
+            /* Larger touch targets */
+            .btn,
+            .btn-small,
+            .nav-item,
+            .sidebar-toggle,
+            .logout-btn {
+                min-height: 44px;
+            }
+
+            /* Remove hover effects on touch devices */
+            .btn:hover,
+            .btn-small:hover,
+            .nav-item:hover,
+            table tr:hover {
+                opacity: 1;
+            }
+
+            /* Improve touch scrolling */
+            .content-body,
+            .sidebar-nav,
+            table {
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+
+        /* High DPI / Retina Display optimizations */
+        @media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+            /* Crisper borders on high DPI screens */
+            .card,
+            .login-card,
+            table,
+            .btn {
+                border-width: 0.5px;
+            }
+        }
+
+        /* Dark mode preference support (already dark, but respect system) */
+        @media (prefers-color-scheme: light) {
+            /* Users can add light mode overrides here if needed */
+            /* Currently keeping dark theme by default */
+        }
+
+        /* Reduced motion for accessibility */
+        @media (prefers-reduced-motion: reduce) {
+            * {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        /* Print styles */
+        @media print {
+            .sidebar,
+            .sidebar-toggle,
+            .mobile-menu-toggle,
+            .btn,
+            .logout-btn {
+                display: none !important;
+            }
+
+            .main-content {
+                width: 100%;
+            }
+
+            .card,
+            table {
+                break-inside: avoid;
+            }
+
+            body {
+                background: white;
+                color: black;
+            }
+        }
     </style>
 </head>
 <body>
@@ -764,6 +1262,14 @@
 
         <!-- Admin Panel -->
         <div id="adminPanel" class="admin-panel">
+            <!-- Mobile Menu Toggle -->
+            <button class="mobile-menu-toggle" id="mobileMenuToggle" onclick="toggleMobileMenu()" aria-label="Toggle menu">
+                ☰
+            </button>
+            
+            <!-- Sidebar Overlay (for mobile) -->
+            <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleMobileMenu()"></div>
+            
             <!-- Sidebar -->
             <aside class="sidebar" id="sidebar">
                 <div class="sidebar-header">
@@ -904,7 +1410,8 @@
             if (avatar && user.username) {
                 avatar.textContent = user.username.charAt(0).toUpperCase();
             }
-            loadDashboard();
+            // Load dashboard tab content and then load dashboard data
+            switchTab('dashboard');
         }
 
         document.getElementById('authForm').addEventListener('submit', async (e) => {
@@ -963,6 +1470,36 @@
             const sidebar = document.getElementById('sidebar');
             sidebar.classList.toggle('collapsed');
         }
+
+        // Mobile menu toggle function
+        function toggleMobileMenu() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            
+            sidebar.classList.toggle('mobile-active');
+            overlay.classList.toggle('active');
+            
+            // Prevent body scroll when menu is open
+            if (sidebar.classList.contains('mobile-active')) {
+                document.body.style.overflow = 'hidden';
+            } else {
+                document.body.style.overflow = '';
+            }
+        }
+
+        // Close mobile menu when clicking on nav items
+        document.addEventListener('DOMContentLoaded', () => {
+            const navItems = document.querySelectorAll('.nav-item');
+            navItems.forEach(item => {
+                item.addEventListener('click', () => {
+                    // Only close on mobile (when mobile-active class is present)
+                    const sidebar = document.getElementById('sidebar');
+                    if (sidebar && sidebar.classList.contains('mobile-active')) {
+                        toggleMobileMenu();
+                    }
+                });
+            });
+        });
 
         // Tab content loaders
         const tabLoaders = {
@@ -1390,12 +1927,240 @@
                 `,
                 'epg': `
                     <div class="card">
-                        <h2>EPG Management</h2>
-                        <div style="margin-top: 15px;">
-                            <button class="btn btn-small btn-success" onclick="refreshEPG()">Refresh EPG Cache</button>
-                            <div id="epgStats" style="margin-top: 20px;"></div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <h2>Electronic Program Guide</h2>
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <span id="epgStats" style="font-size: 14px; color: var(--text-muted);"></span>
+                                <button class="btn btn-small btn-success" onclick="refreshEPG()">
+                                    <span style="margin-right: 6px;">↻</span> Refresh Cache
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 16px; background: var(--bg-secondary); border-radius: var(--radius); margin-bottom: 20px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <label style="font-weight: 500; color: var(--text-secondary); white-space: nowrap;">Date:</label>
+                                <input type="date" id="epgDatePicker" onchange="loadEPGViewer()" 
+                                    style="padding: 8px 12px; border-radius: var(--radius); border: 1px solid var(--border); 
+                                    background: var(--bg-tertiary); color: var(--text-primary); font-size: 14px;">
+                            </div>
+                            <button class="btn btn-small" onclick="setEPGToday()">Today</button>
+                            <button class="btn btn-small" onclick="setEPGTomorrow()">Tomorrow</button>
+                            
+                            <div style="display: flex; align-items: center; gap: 8px; padding: 0 12px; border-left: 1px solid var(--border);">
+                                <label style="font-weight: 500; color: var(--text-secondary); white-space: nowrap;">Zoom:</label>
+                                <button class="btn btn-small" onclick="adjustEPGZoom(-0.2)" title="Zoom Out">−</button>
+                                <span id="epgZoomLevel" style="min-width: 50px; text-align: center; font-size: 13px; color: var(--text-secondary);">300%</span>
+                                <button class="btn btn-small" onclick="adjustEPGZoom(0.2)" title="Zoom In">+</button>
+                                <button class="btn btn-small" onclick="resetEPGZoom()" title="Reset Zoom">Reset</button>
+                            </div>
+                            
+                            <div style="flex: 1; min-width: 200px;">
+                                <select id="epgChannelFilter" onchange="filterEPGByChannel()" 
+                                    style="width: 100%; padding: 8px 12px; border-radius: var(--radius); border: 1px solid var(--border); 
+                                    background: var(--bg-tertiary); color: var(--text-primary); font-size: 14px;">
+                                    <option value="all">All Channels</option>
+                                </select>
+                            </div>
+                            <div style="margin-left: auto; font-size: 13px; color: var(--text-muted); white-space: nowrap;">
+                                <span id="currentTimeIndicator"></span>
+                            </div>
+                        </div>
+                        
+                        <div id="epgViewerContainer" class="epg-container">
+                            <div class="loading">Loading EPG data...</div>
                         </div>
                     </div>
+                    
+                    <style>
+                        .epg-container {
+                            background: var(--bg-primary);
+                            border-radius: var(--radius);
+                            overflow-x: auto;
+                            overflow-y: auto;
+                            border: 1px solid var(--border);
+                            max-height: 800px;
+                            position: relative;
+                        }
+                        
+                        .epg-container::-webkit-scrollbar {
+                            width: 12px;
+                            height: 12px;
+                        }
+                        
+                        .epg-container::-webkit-scrollbar-track {
+                            background: var(--bg-secondary);
+                        }
+                        
+                        .epg-container::-webkit-scrollbar-thumb {
+                            background: var(--bg-hover);
+                            border-radius: 6px;
+                        }
+                        
+                        .epg-container::-webkit-scrollbar-thumb:hover {
+                            background: var(--text-muted);
+                        }
+                        
+                        .epg-grid {
+                            display: flex;
+                            flex-direction: column;
+                            min-width: 100%;
+                            transition: transform 0.1s ease-out;
+                        }
+                        
+                        .epg-timeline {
+                            display: grid;
+                            grid-template-columns: 200px repeat(24, minmax(var(--epg-hour-width, 120px), 1fr));
+                            background: var(--bg-secondary);
+                            border-bottom: 2px solid var(--border);
+                            position: sticky;
+                            top: 0;
+                            z-index: 100;
+                        }
+                        
+                        .epg-timeline-cell {
+                            padding: 12px 8px;
+                            text-align: center;
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: var(--text-secondary);
+                            border-right: 1px solid var(--border);
+                        }
+                        
+                        .epg-timeline-cell:first-child {
+                            text-align: left;
+                            padding-left: 16px;
+                            font-size: 14px;
+                            color: var(--text-primary);
+                        }
+                        
+                        .epg-channel-row {
+                            display: grid;
+                            grid-template-columns: 200px 1fr;
+                            border-bottom: 1px solid var(--border);
+                            min-height: 70px;
+                            transition: background-color 0.2s ease;
+                        }
+                        
+                        .epg-channel-row:hover {
+                            background: var(--bg-secondary);
+                        }
+                        
+                        .epg-channel-name {
+                            padding: 16px;
+                            font-weight: 600;
+                            color: var(--text-primary);
+                            border-right: 2px solid var(--border);
+                            display: flex;
+                            align-items: center;
+                            background: var(--bg-secondary);
+                            font-size: 14px;
+                        }
+                        
+                        .epg-timeline-track {
+                            position: relative;
+                            display: grid;
+                            grid-template-columns: repeat(24, minmax(var(--epg-hour-width, 120px), 1fr));
+                        }
+                        
+                        .epg-timeline-track::before {
+                            content: '';
+                            position: absolute;
+                            inset: 0;
+                            background: repeating-linear-gradient(
+                                90deg,
+                                transparent 0px,
+                                transparent calc(100% / 24 - 1px),
+                                var(--border) calc(100% / 24 - 1px),
+                                var(--border) calc(100% / 24)
+                            );
+                            pointer-events: none;
+                            z-index: 1;
+                        }
+                        
+                        .epg-program {
+                            position: absolute;
+                            top: 4px;
+                            bottom: 4px;
+                            border-radius: 6px;
+                            padding: 8px 12px;
+                            overflow: hidden;
+                            cursor: pointer;
+                            transition: transform 0.2s ease, box-shadow 0.2s ease;
+                            border: 1px solid rgba(255, 255, 255, 0.1);
+                            z-index: 2;
+                        }
+                        
+                        .epg-program:hover {
+                            transform: scale(1.02);
+                            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+                            z-index: 10;
+                        }
+                        
+                        .epg-program.airing {
+                            background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+                            border-color: rgba(255, 255, 255, 0.2);
+                            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+                        }
+                        
+                        .epg-program.upcoming {
+                            background: linear-gradient(135deg, var(--accent) 0%, #1d4ed8 100%);
+                        }
+                        
+                        .epg-program.past {
+                            background: linear-gradient(135deg, var(--bg-tertiary) 0%, #1e293b 100%);
+                            opacity: 0.6;
+                        }
+                        
+                        .epg-program-title {
+                            font-size: 13px;
+                            font-weight: 600;
+                            color: white;
+                            white-space: nowrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            margin-bottom: 2px;
+                        }
+                        
+                        .epg-program-time {
+                            font-size: 11px;
+                            color: rgba(255, 255, 255, 0.8);
+                            font-weight: 500;
+                        }
+                        
+                        .epg-program.past .epg-program-title,
+                        .epg-program.past .epg-program-time {
+                            color: var(--text-muted);
+                        }
+                        
+                        .epg-no-data {
+                            text-align: center;
+                            padding: 60px 20px;
+                            color: var(--text-muted);
+                            font-size: 15px;
+                        }
+                        
+                        .epg-current-time-marker {
+                            position: absolute;
+                            top: 0;
+                            bottom: 0;
+                            width: 2px;
+                            background: var(--danger);
+                            z-index: 5;
+                            pointer-events: none;
+                        }
+                        
+                        .epg-current-time-marker::before {
+                            content: '';
+                            position: absolute;
+                            top: -4px;
+                            left: -3px;
+                            width: 8px;
+                            height: 8px;
+                            background: var(--danger);
+                            border-radius: 50%;
+                        }
+                    </style>
                 `
             };
             return contentBodies[tabName] || '<div class="loading">Loading...</div>';
@@ -1526,10 +2291,15 @@
                 const activeChannels = channels.filter(c => c.state === 'streaming');
                 const totalViewers = channels.reduce((sum, c) => sum + (c.viewerCount || 0), 0);
 
-                document.getElementById('statChannels').textContent = channels.length;
-                document.getElementById('statActive').textContent = activeChannels.length;
-                document.getElementById('statMedia').textContent = mediaData.data?.count || 0;
-                document.getElementById('statViewers').textContent = totalViewers;
+                const statChannels = document.getElementById('statChannels');
+                const statActive = document.getElementById('statActive');
+                const statMedia = document.getElementById('statMedia');
+                const statViewers = document.getElementById('statViewers');
+
+                if (statChannels) statChannels.textContent = channels.length;
+                if (statActive) statActive.textContent = activeChannels.length;
+                if (statMedia) statMedia.textContent = mediaData.data?.count || 0;
+                if (statViewers) statViewers.textContent = totalViewers;
             } catch (error) {
                 console.error('Failed to load dashboard:', error);
             }
@@ -1537,6 +2307,10 @@
 
         async function loadChannels() {
             const listDiv = document.getElementById('channelsList');
+            if (!listDiv) {
+                console.warn('channelsList element not found');
+                return;
+            }
             try {
                 const [channelsRes, bucketsRes] = await Promise.all([
                     fetch(`${API_BASE}/api/channels`),
@@ -1803,6 +2577,10 @@
 
         async function loadBuckets() {
             const listDiv = document.getElementById('bucketsList');
+            if (!listDiv) {
+                console.warn('bucketsList element not found');
+                return;
+            }
             try {
                 const res = await fetch(`${API_BASE}/api/buckets`);
                 const data = await res.json();
@@ -2022,6 +2800,66 @@
             return `${size.toFixed(2)} ${units[unitIndex]}`;
         }
 
+        let epgData = {};
+        let epgChannelsList = [];
+        let epgZoomScale = 3.0; // Default zoom level (300%)
+        
+        function adjustEPGZoom(delta) {
+            epgZoomScale = Math.max(0.5, Math.min(3.0, epgZoomScale + delta));
+            updateEPGZoom();
+        }
+        
+        function resetEPGZoom() {
+            epgZoomScale = 3.0; // Reset to 300%
+            updateEPGZoom();
+        }
+        
+        function updateEPGZoom() {
+            const baseWidth = 120; // Base width in pixels per hour
+            const newWidth = Math.round(baseWidth * epgZoomScale);
+            const container = document.getElementById('epgViewerContainer');
+            const grid = container.querySelector('.epg-grid');
+            
+            if (grid) {
+                grid.style.setProperty('--epg-hour-width', `${newWidth}px`);
+            }
+            
+            // Update zoom level display
+            const zoomDisplay = document.getElementById('epgZoomLevel');
+            if (zoomDisplay) {
+                zoomDisplay.textContent = Math.round(epgZoomScale * 100) + '%';
+            }
+            
+            // Scroll to current time if viewing today
+            const datePicker = document.getElementById('epgDatePicker');
+            const today = new Date().toISOString().split('T')[0];
+            if (datePicker && datePicker.value === today) {
+                scrollToCurrentTime();
+            }
+        }
+        
+        function scrollToCurrentTime() {
+            const container = document.getElementById('epgViewerContainer');
+            if (!container) return;
+            
+            const now = new Date();
+            const hours = now.getHours();
+            const minutes = now.getMinutes();
+            const currentTimePercent = (hours + minutes / 60) / 24;
+            
+            const grid = container.querySelector('.epg-grid');
+            if (grid) {
+                const scrollWidth = grid.scrollWidth - container.clientWidth;
+                const scrollPosition = scrollWidth * currentTimePercent;
+                
+                // Scroll to position with smooth behavior
+                container.scrollTo({
+                    left: Math.max(0, scrollPosition - container.clientWidth / 3),
+                    behavior: 'smooth'
+                });
+            }
+        }
+        
         async function loadEPG() {
             try {
                 const res = await fetch(`${API_BASE}/api/epg/stats`);
@@ -2029,14 +2867,298 @@
                 const stats = data.data || {};
 
                 document.getElementById('epgStats').innerHTML = `
-                    <div class="stat-card">
-                        <h3>EPG Cache Status</h3>
-                        <p>Channels cached: ${stats.channelCount || 0}</p>
-                        <p>Last generated: ${stats.lastGenerated || 'Never'}</p>
-                    </div>
+                    <span style="font-size: 14px; color: #666;">
+                        Cached: ${stats.channelCount || 0} channels
+                    </span>
                 `;
+                
+                // Load channels for filter dropdown
+                await loadEPGChannels();
+                
+                // Set date picker to today
+                const today = new Date();
+                const datePicker = document.getElementById('epgDatePicker');
+                if (datePicker && !datePicker.value) {
+                    datePicker.value = today.toISOString().split('T')[0];
+                }
+                
+                // Load EPG viewer
+                await loadEPGViewer();
+                
+                // Update current time indicator every 30 seconds
+                updateCurrentTimeIndicator();
+                setInterval(updateCurrentTimeIndicator, 30000);
             } catch (error) {
-                document.getElementById('epgStats').innerHTML = '<p class="error">Failed to load EPG stats.</p>';
+                document.getElementById('epgStats').innerHTML = '<span style="color: #dc3545;">Failed to load EPG stats</span>';
+            }
+        }
+
+        async function loadEPGChannels() {
+            // Channels will be loaded from EPG XML
+        }
+        
+        async function loadEPGViewer() {
+            const container = document.getElementById('epgViewerContainer');
+            container.innerHTML = '<div class="loading">Loading EPG data...</div>';
+            
+            const datePicker = document.getElementById('epgDatePicker');
+            const selectedDate = datePicker ? datePicker.value : new Date().toISOString().split('T')[0];
+            
+            try {
+                // Fetch and parse EPG XML
+                const res = await fetch(`${API_BASE}/epg.xml`);
+                const xmlText = await res.text();
+                
+                // Parse XML
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+                
+                // Extract channels
+                const channelsMap = new Map();
+                const channelElements = xmlDoc.getElementsByTagName('channel');
+                for (let i = 0; i < channelElements.length; i++) {
+                    const channel = channelElements[i];
+                    const id = channel.getAttribute('id');
+                    const displayName = channel.getElementsByTagName('display-name')[0]?.textContent || id;
+                    channelsMap.set(id, { id, name: displayName });
+                }
+                
+                // Extract programmes
+                epgData = {};
+                const programElements = xmlDoc.getElementsByTagName('programme');
+                for (let i = 0; i < programElements.length; i++) {
+                    const program = programElements[i];
+                    const channelId = program.getAttribute('channel');
+                    const start = parseXMLTVTime(program.getAttribute('start'));
+                    const stop = parseXMLTVTime(program.getAttribute('stop'));
+                    
+                    const title = program.getElementsByTagName('title')[0]?.textContent || 'Unknown';
+                    const desc = program.getElementsByTagName('desc')[0]?.textContent || '';
+                    
+                    if (!epgData[channelId]) {
+                        epgData[channelId] = {
+                            channel: channelsMap.get(channelId) || { id: channelId, name: channelId },
+                            programs: []
+                        };
+                    }
+                    
+                    epgData[channelId].programs.push({
+                        start: start,
+                        stop: stop,
+                        title: title,
+                        description: desc
+                    });
+                }
+                
+                // Populate channel filter dropdown
+                const filterSelect = document.getElementById('epgChannelFilter');
+                filterSelect.innerHTML = '<option value="all">All Channels</option>';
+                Object.entries(epgData).forEach(([channelId, data]) => {
+                    const option = document.createElement('option');
+                    option.value = channelId;
+                    option.textContent = data.channel.name;
+                    filterSelect.appendChild(option);
+                });
+                
+                // Render EPG grid
+                renderEPGGrid(selectedDate);
+                
+                // Apply current zoom level
+                setTimeout(() => {
+                    updateEPGZoom();
+                }, 100);
+            } catch (error) {
+                console.error('Failed to load EPG XML:', error);
+                container.innerHTML = '<p class="error">Failed to load EPG data. Error: ' + error.message + '</p>';
+            }
+        }
+        
+        function parseXMLTVTime(xmltvTime) {
+            // XMLTV time format: YYYYMMDDHHmmss +TTTT
+            // Example: 20240101120000 +0000
+            if (!xmltvTime) return new Date();
+            
+            const year = xmltvTime.substring(0, 4);
+            const month = xmltvTime.substring(4, 6);
+            const day = xmltvTime.substring(6, 8);
+            const hour = xmltvTime.substring(8, 10);
+            const minute = xmltvTime.substring(10, 12);
+            const second = xmltvTime.substring(12, 14);
+            
+            // Parse timezone offset if present
+            let dateStr = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
+            
+            if (xmltvTime.includes(' ')) {
+                const tzPart = xmltvTime.split(' ')[1];
+                if (tzPart) {
+                    const sign = tzPart[0];
+                    const tzHours = tzPart.substring(1, 3);
+                    const tzMinutes = tzPart.substring(3, 5);
+                    dateStr += `${sign}${tzHours}:${tzMinutes}`;
+                }
+            } else {
+                dateStr += 'Z';
+            }
+            
+            return new Date(dateStr);
+        }
+        
+        function renderEPGGrid(dateStr) {
+            const container = document.getElementById('epgViewerContainer');
+            const filterSelect = document.getElementById('epgChannelFilter');
+            const selectedChannelId = filterSelect ? filterSelect.value : 'all';
+            
+            // Parse selected date
+            const selectedDate = new Date(dateStr + 'T00:00:00');
+            const startOfDay = new Date(selectedDate);
+            const endOfDay = new Date(selectedDate);
+            endOfDay.setDate(endOfDay.getDate() + 1);
+            
+            // Filter channels
+            let channelsToShow = Object.entries(epgData);
+            if (selectedChannelId !== 'all') {
+                channelsToShow = channelsToShow.filter(([channelId]) => channelId === selectedChannelId);
+            }
+            
+            if (channelsToShow.length === 0) {
+                container.innerHTML = '<div class="epg-no-data">No EPG data available for this date</div>';
+                return;
+            }
+            
+            // Sort channels by name
+            channelsToShow.sort((a, b) => {
+                const nameA = a[1].channel.name.toLowerCase();
+                const nameB = b[1].channel.name.toLowerCase();
+                return nameA.localeCompare(nameB);
+            });
+            
+            // Build EPG grid
+            let html = '<div class="epg-grid">';
+            
+            // Time header row
+            html += '<div class="epg-timeline">';
+            html += '<div class="epg-timeline-cell">Channel</div>';
+            for (let hour = 0; hour < 24; hour++) {
+                html += `<div class="epg-timeline-cell">${hour.toString().padStart(2, '0')}:00</div>`;
+            }
+            html += '</div>';
+            
+            // Check if we should show current time marker
+            const now = new Date();
+            const showCurrentTime = now >= startOfDay && now < endOfDay;
+            let currentTimeOffset = 0;
+            if (showCurrentTime) {
+                currentTimeOffset = ((now - startOfDay) / (24 * 60 * 60 * 1000)) * 100;
+            }
+            
+            // Channel rows
+            channelsToShow.forEach(([channelId, data]) => {
+                const channelName = data.channel.name;
+                const programs = data.programs.filter(p => {
+                    const start = new Date(p.start);
+                    const end = new Date(p.stop);
+                    return end > startOfDay && start < endOfDay;
+                });
+                
+                html += '<div class="epg-channel-row">';
+                html += `<div class="epg-channel-name">${escapeHtml(channelName)}</div>`;
+                html += '<div class="epg-timeline-track">';
+                
+                // Add current time marker if applicable
+                if (showCurrentTime) {
+                    html += `<div class="epg-current-time-marker" style="left: ${currentTimeOffset}%;"></div>`;
+                }
+                
+                // Add programs
+                programs.forEach(program => {
+                    const start = new Date(program.start);
+                    const end = new Date(program.stop);
+                    
+                    // Clamp to day boundaries
+                    const displayStart = start < startOfDay ? startOfDay : start;
+                    const displayEnd = end > endOfDay ? endOfDay : end;
+                    
+                    // Calculate position and width
+                    const startOffset = ((displayStart - startOfDay) / (24 * 60 * 60 * 1000)) * 100;
+                    const width = ((displayEnd - displayStart) / (24 * 60 * 60 * 1000)) * 100;
+                    
+                    // Determine status
+                    const isAiring = start <= now && end > now;
+                    const isPast = end <= now;
+                    const statusClass = isAiring ? 'airing' : (isPast ? 'past' : 'upcoming');
+                    
+                    // Create safe JSON string for onclick
+                    const programJson = JSON.stringify({
+                        title: program.title,
+                        description: program.description,
+                        start: program.start,
+                        stop: program.stop
+                    }).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                    
+                    html += `<div class="epg-program ${statusClass}" 
+                        style="left: ${startOffset}%; width: ${width}%;"
+                        onclick='showProgramDetails(${programJson}, "${escapeHtml(channelName).replace(/"/g, '&quot;')}")'
+                        title="${escapeHtml(program.title)}">
+                        <div class="epg-program-title">${escapeHtml(program.title)}</div>
+                        <div class="epg-program-time">${formatTime(start)} - ${formatTime(end)}</div>
+                    </div>`;
+                });
+                
+                html += '</div></div>';
+            });
+            
+            html += '</div>';
+            container.innerHTML = html;
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function formatTime(date) {
+            const d = new Date(date);
+            return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+        
+        function showProgramDetails(program, channelName) {
+            const start = new Date(program.start);
+            const end = new Date(program.stop);
+            const duration = Math.round((end - start) / 60000); // minutes
+            
+            alert(`Channel: ${channelName}\n\nTitle: ${program.title}\n\nStart: ${start.toLocaleString()}\nEnd: ${end.toLocaleString()}\nDuration: ${duration} minutes\n\n${program.description || 'No description available'}`);
+        }
+        
+        function filterEPGByChannel() {
+            const datePicker = document.getElementById('epgDatePicker');
+            const selectedDate = datePicker ? datePicker.value : new Date().toISOString().split('T')[0];
+            renderEPGGrid(selectedDate);
+        }
+        
+        function setEPGToday() {
+            const datePicker = document.getElementById('epgDatePicker');
+            if (datePicker) {
+                datePicker.value = new Date().toISOString().split('T')[0];
+                loadEPGViewer();
+            }
+        }
+        
+        function setEPGTomorrow() {
+            const datePicker = document.getElementById('epgDatePicker');
+            if (datePicker) {
+                const tomorrow = new Date();
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                datePicker.value = tomorrow.toISOString().split('T')[0];
+                loadEPGViewer();
+            }
+        }
+        
+        function updateCurrentTimeIndicator() {
+            const indicator = document.getElementById('currentTimeIndicator');
+            if (indicator) {
+                const now = new Date();
+                indicator.textContent = `Current time: ${now.toLocaleString()}`;
             }
         }
 
@@ -2048,7 +3170,7 @@
                 });
                 if (res.ok) {
                     alert('EPG cache refreshed!');
-                    loadEPG();
+                    await loadEPG();
                 }
             } catch (error) {
                 alert('Failed to refresh EPG cache.');
@@ -3766,8 +4888,19 @@
 
         function showAddBlockForm(blockId = null) {
             const form = document.getElementById('addBlockForm');
+            if (!form) {
+                console.error('addBlockForm element not found. Please ensure you are on the playlists tab.');
+                alert('Please navigate to the Playlists tab to edit schedule blocks.');
+                return;
+            }
+            
             const formTitle = form.querySelector('h3');
             const submitBtn = form.querySelector('button[type="submit"]');
+            
+            if (!formTitle || !submitBtn) {
+                console.error('Form elements not found');
+                return;
+            }
             
             if (blockId) {
                 // Edit mode
@@ -3775,14 +4908,23 @@
                 if (block) {
                     formTitle.textContent = 'Edit Schedule Block';
                     submitBtn.textContent = 'Update Block';
-                    document.getElementById('blockId').value = block.id;
-                    document.getElementById('blockName').value = block.name;
+                    
+                    const blockIdEl = document.getElementById('blockId');
+                    const blockNameEl = document.getElementById('blockName');
+                    const blockStartTimeEl = document.getElementById('blockStartTime');
+                    const blockEndTimeEl = document.getElementById('blockEndTime');
+                    const blockPlaybackModeEl = document.getElementById('blockPlaybackMode');
+                    const blockPriorityEl = document.getElementById('blockPriority');
+                    const blockEnabledEl = document.getElementById('blockEnabled');
+                    
+                    if (blockIdEl) blockIdEl.value = block.id;
+                    if (blockNameEl) blockNameEl.value = block.name;
                     // Strip seconds from time for HTML time input (HH:MM:SS -> HH:MM)
-                    document.getElementById('blockStartTime').value = block.startTime.substring(0, 5);
-                    document.getElementById('blockEndTime').value = block.endTime.substring(0, 5);
-                    document.getElementById('blockPlaybackMode').value = block.playbackMode || 'sequential';
-                    document.getElementById('blockPriority').value = block.priority || 1;
-                    document.getElementById('blockEnabled').checked = block.enabled !== false;
+                    if (blockStartTimeEl) blockStartTimeEl.value = block.startTime.substring(0, 5);
+                    if (blockEndTimeEl) blockEndTimeEl.value = block.endTime.substring(0, 5);
+                    if (blockPlaybackModeEl) blockPlaybackModeEl.value = block.playbackMode || 'sequential';
+                    if (blockPriorityEl) blockPriorityEl.value = block.priority || 1;
+                    if (blockEnabledEl) blockEnabledEl.checked = block.enabled !== false;
                     
                     // Set day checkboxes
                     document.querySelectorAll('input[name="dayOfWeek"]').forEach(cb => cb.checked = false);
@@ -3795,18 +4937,27 @@
                     
                     // Set bucket
                     setTimeout(() => {
-                        document.getElementById('blockBucketId').value = block.bucketId || '';
-                        updateManageBucketButton();
+                        const blockBucketIdEl = document.getElementById('blockBucketId');
+                        if (blockBucketIdEl) {
+                            blockBucketIdEl.value = block.bucketId || '';
+                            updateManageBucketButton();
+                        }
                     }, 100);
                 }
             } else {
                 // Create mode
                 formTitle.textContent = 'Add Schedule Block';
                 submitBtn.textContent = 'Save Block';
-                document.getElementById('newBlockForm').reset();
-                document.getElementById('blockId').value = '';
-                document.getElementById('blockPriority').value = '1';
-                document.getElementById('blockEnabled').checked = true;
+                
+                const newBlockForm = document.getElementById('newBlockForm');
+                const blockIdEl = document.getElementById('blockId');
+                const blockPriorityEl = document.getElementById('blockPriority');
+                const blockEnabledEl = document.getElementById('blockEnabled');
+                
+                if (newBlockForm) newBlockForm.reset();
+                if (blockIdEl) blockIdEl.value = '';
+                if (blockPriorityEl) blockPriorityEl.value = '1';
+                if (blockEnabledEl) blockEnabledEl.checked = true;
                 updateManageBucketButton();
             }
             

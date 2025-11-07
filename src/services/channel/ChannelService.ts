@@ -509,17 +509,24 @@ export class ChannelService {
    */
   public async startChannel(
     channelId: string,
-    startIndex?: number,
-    seekPosition?: number
+    startIndex?: number
   ): Promise<void> {
     const channel = await this.getChannel(channelId);
-    let media = await this.getChannelMedia(channelId);
+    // CRITICAL: For dynamic playlists, we should NOT get media here using current time
+    // because EPG will determine the correct media list based on the program's schedule block.
+    // We'll get the media list from EPG after getting the position.
+    let media: MediaFile[] = [];
+    
+    // For static playlists, get media now
+    if (!channel.config.useDynamicPlaylist || !this.playlistResolver) {
+      media = await this.getChannelMedia(channelId);
+    }
     
     // For dynamic playlists, store media list for comparison in onFileEnd
     // This allows us to detect schedule block transitions
     if (channel.config.useDynamicPlaylist) {
-      this.channelMedia.set(channelId, [...media]); // Store copy for comparison
-      logger.debug({ channelId, mediaCount: media.length }, 'Stored media list for schedule block transition detection');
+      // We'll set this after we get the EPG media list
+      logger.debug({ channelId }, 'Dynamic playlist - will get media list from EPG');
     }
 
     // Handle orphaned states (STOPPING, ERROR) - reset to IDLE before starting
@@ -540,9 +547,43 @@ export class ChannelService {
       throw new ConflictError(`Channel is already ${channel.getState()}`);
     }
 
-    // Validate media
-    if (media.length === 0) {
+    // For dynamic playlists, media will be set from EPG below
+    // For static playlists, validate media now
+    if (!channel.config.useDynamicPlaylist && media.length === 0) {
       throw new ValidationError('Channel has no media files');
+    }
+
+    // DEBUG: For dynamic playlists, check what blocks exist and why getActiveBlock might not find them
+    if (channel.config.useDynamicPlaylist && this.playlistResolver) {
+      try {
+        const ScheduleRepository = (await import('../../infrastructure/database/repositories/ScheduleRepository')).ScheduleRepository;
+        const scheduleRepository = new ScheduleRepository();
+        const allBlocks = await scheduleRepository.getAllEnabledBlocks(channelId);
+        const now = new Date();
+        const activeBlock = await scheduleRepository.getActiveBlock(channelId, now);
+        
+        logger.info(
+          {
+            channelId,
+            currentTime: now.toISOString(),
+            dayOfWeek: now.getDay(),
+            timeStr: now.toTimeString().substring(0, 8),
+            totalEnabledBlocks: allBlocks.length,
+            hasActiveBlock: !!activeBlock,
+            activeBlockName: activeBlock?.name,
+            allBlockNames: allBlocks.map(b => ({
+              name: b.name,
+              dayOfWeek: b.day_of_week,
+              startTime: b.start_time,
+              endTime: b.end_time,
+              enabled: b.enabled,
+            })),
+          },
+          'Schedule block check for dynamic playlist channel'
+        );
+      } catch (error) {
+        logger.warn({ error, channelId }, 'Failed to check schedule blocks (non-fatal)');
+      }
     }
 
     try {
@@ -594,6 +635,97 @@ export class ChannelService {
         (wasPaused || isIdle) &&
         startIndex === undefined;
 
+      // CRITICAL: For dynamic playlists, ALWAYS get media from EPG before anything else
+      // This ensures we use the schedule block's media that matches what EPG shows
+      if (channel.config.useDynamicPlaylist && this.playlistResolver) {
+        logger.debug(
+          { channelId },
+          'Dynamic playlist detected - getting media from EPG before determining position'
+        );
+        
+        // Get temp media to generate programs
+        const tempMedia = media.length > 0 ? media : await this.getChannelMedia(channelId);
+        logger.debug(
+          {
+            channelId,
+            tempMediaCount: tempMedia.length,
+            tempMediaFirstFile: tempMedia[0]?.filename,
+          },
+          'Got temporary media list to generate EPG programs'
+        );
+        
+        const programs = await this.epgService.generatePrograms(channel, tempMedia);
+        const now = new Date();
+        const currentProgram = programs.find((p) => p.isAiring(now));
+        
+        logger.info(
+          {
+            channelId,
+            programCount: programs.length,
+            currentTime: now.toISOString(),
+            hasCurrentProgram: !!currentProgram,
+            currentProgramTitle: currentProgram?.info?.title,
+            currentProgramStart: currentProgram?.startTime.toISOString(),
+          },
+          'Generated EPG programs and found current program'
+        );
+        
+        if (currentProgram) {
+          // Get the media list that EPG actually used for this program
+          const epgContext = {
+            currentTime: currentProgram.startTime,
+            currentIndex: 0,
+          };
+          
+          logger.debug(
+            {
+              channelId,
+              programStartTime: currentProgram.startTime.toISOString(),
+              programTitle: currentProgram.info.title,
+              contextTime: epgContext.currentTime.toISOString(),
+            },
+            'Calling resolveMedia with program start time to get EPG media list'
+          );
+          
+          let epgMedia = await this.playlistResolver.resolveMedia(channelId, epgContext);
+          
+          logger.info(
+            {
+              channelId,
+              epgMediaCount: epgMedia.length,
+              programStartTime: currentProgram.startTime.toISOString(),
+              programTitle: currentProgram.info.title,
+              epgMediaFirstFile: epgMedia[0]?.filename,
+              epgMediaFirstTitle: epgMedia[0]?.info?.title,
+            },
+            'Resolved EPG media list from program\'s schedule block'
+          );
+          
+          if (epgMedia.length === 0) {
+            logger.warn(
+              { channelId, programTitle: currentProgram.info.title },
+              'EPG media list is empty, falling back to current time media'
+            );
+            epgMedia = await this.getChannelMedia(channelId);
+          }
+          
+          if (epgMedia.length > 0) {
+            media = epgMedia;
+            logger.info(
+              {
+                channelId,
+                epgMediaCount: epgMedia.length,
+                firstFile: media[0]?.filename,
+              },
+              'Using EPG media list for playback'
+            );
+          }
+        } else {
+          logger.warn({ channelId }, 'No current program in EPG, using current time media');
+          media = await this.getChannelMedia(channelId);
+        }
+      }
+      
       if (shouldUseVirtualTime) {
         // Channel was paused - use EPG as the single source of truth for resume position
         // EPG knows what should be playing now based on program schedule
@@ -607,65 +739,110 @@ export class ChannelService {
           'Getting resume position from EPG (single source of truth)'
         );
         
-        // EPG is the single source of truth - it calculates position from program schedule
-        const epgPosition = await this.epgService.getCurrentPlaybackPosition(channel, media);
+        // Media was already set above from EPG for dynamic playlists
+        logger.debug(
+          {
+            channelId,
+            mediaCount: media.length,
+            firstFile: media[0]?.filename,
+          },
+          'Media already set from EPG, now getting playback position'
+        );
+        
+        // Validate media is not empty
+        if (media.length === 0) {
+          logger.error(
+            { channelId },
+            'Media list is empty after EPG resolution - cannot use EPG for position'
+          );
+          // Fall through to virtual time fallback below
+        }
+        
+        const epgPosition = media.length > 0 ? await this.epgService.getCurrentPlaybackPosition(channel, media) : null;
         if (epgPosition) {
           actualStartIndex = epgPosition.fileIndex;
           seekToSeconds = epgPosition.seekPosition;
-
-          // CRITICAL: For dynamic playlists, EPG may have used a different media list
-          // than the current schedule block's media. We need to get the media list
-          // that EPG actually used to ensure the file index is valid.
-          if (channel.config.useDynamicPlaylist && this.playlistResolver) {
-            try {
-              // Get the programs to find the current program's start time
-              const programs = await this.epgService.generatePrograms(channel, media);
-              const now = new Date();
-              const currentProgram = programs.find((p) => p.isAiring(now));
+          
+          // CRITICAL: Verify we're playing what EPG says should be playing NOW
+          // This ensures UX consistency - if EPG shows "Robot Chicken", we should be playing Robot Chicken
+          try {
+            const { current } = await this.epgService.getCurrentAndNext(channel, media);
+            if (current) {
+              const currentFile = media[actualStartIndex];
+              const epgProgramTitle = current.info.title;
+              const actualFileTitle = currentFile?.getDisplayName() || currentFile?.filename || 'Unknown';
               
-              if (currentProgram) {
-                // Get the media list that EPG actually used for this program
-                const epgContext = {
-                  currentTime: currentProgram.startTime,
-                  currentIndex: 0,
-                };
-                const epgMedia = await this.playlistResolver.resolveMedia(channelId, epgContext);
+              // Check if the file we're about to play matches what EPG says should be playing
+              if (epgProgramTitle !== actualFileTitle) {
+                logger.info(
+                  {
+                    channelId,
+                    epgProgramTitle,
+                    actualFileTitle,
+                    epgIndex: actualStartIndex,
+                    willSync: true,
+                  },
+                  'EPG program title does not match current file - EPG says should be playing different content'
+                );
                 
-                if (epgMedia.length > 0) {
-                  // Validate index is within bounds of EPG media list
-                  if (actualStartIndex >= epgMedia.length) {
-                    logger.warn(
-                      {
-                        channelId,
-                        epgIndex: actualStartIndex,
-                        epgMediaCount: epgMedia.length,
-                        currentMediaCount: media.length,
-                      },
-                      'EPG file index out of bounds for EPG media list, resetting to 0'
-                    );
-                    actualStartIndex = 0;
-                    seekToSeconds = 0;
-                  } else {
-                    // Use the EPG media list - it matches what EPG generated
-                    media = epgMedia;
-                    logger.info(
-                      {
-                        channelId,
-                        epgIndex: actualStartIndex,
-                        epgMediaCount: epgMedia.length,
-                        currentMediaCount: media.length,
-                      },
-                      'Using EPG media list for dynamic playlist (matches EPG generation)'
-                    );
-                  }
+                // Find the file that matches the EPG program title
+                const matchingFileIndex = media.findIndex(m => {
+                  const displayName = m.getDisplayName();
+                  return displayName === epgProgramTitle || m.filename === epgProgramTitle;
+                });
+                
+                if (matchingFileIndex !== -1) {
+                  logger.info(
+                    {
+                      channelId,
+                      oldIndex: actualStartIndex,
+                      newIndex: matchingFileIndex,
+                      epgProgramTitle,
+                      oldFile: actualFileTitle,
+                      newFile: media[matchingFileIndex]?.getDisplayName(),
+                    },
+                    'Syncing to EPG program - switching to file that matches EPG current program'
+                  );
+                  actualStartIndex = matchingFileIndex;
+                  seekToSeconds = 0; // Start from beginning of the correct file
+                } else {
+                  logger.warn(
+                    {
+                      channelId,
+                      epgProgramTitle,
+                      mediaFiles: media.map(m => m.getDisplayName()),
+                    },
+                    'Could not find file matching EPG program title - using EPG position as-is'
+                  );
                 }
+              } else {
+                logger.debug(
+                  {
+                    channelId,
+                    epgProgramTitle,
+                    actualFileTitle,
+                    fileIndex: actualStartIndex,
+                  },
+                  'EPG program matches current file - no sync needed'
+                );
               }
-            } catch (error) {
-              logger.warn(
-                { error, channelId },
-                'Failed to get EPG media list for dynamic playlist, using current media list'
-              );
             }
+          } catch (epgCheckError) {
+            logger.warn(
+              { error: epgCheckError, channelId },
+              'Failed to verify EPG program match (non-fatal, continuing with EPG position)'
+            );
+          }
+          
+          // Store the EPG media list for dynamic playlists
+          if (channel.config.useDynamicPlaylist) {
+            this.channelMedia.set(channelId, [...media]); // Store copy for comparison
+            logger.debug({ channelId, mediaCount: media.length }, 'Stored EPG media list for schedule block transition detection');
+          }
+          
+          // Validate media after getting EPG media list
+          if (media.length === 0) {
+            throw new ValidationError('Channel has no media files (EPG returned empty media list)');
           }
 
           logger.info(
@@ -675,8 +852,10 @@ export class ChannelService {
               epgPosition: seekToSeconds,
               method: 'EPG-based (single source of truth)',
               mediaCount: media.length,
+              fileAtIndex: media[actualStartIndex]?.filename,
+              fileTitle: media[actualStartIndex]?.info?.title,
             },
-            'Resuming from EPG-calculated position'
+            'Resuming from EPG-calculated position (synced with EPG current program)'
           );
         } else {
           // EPG couldn't determine position - fallback to virtual time
@@ -703,60 +882,64 @@ export class ChannelService {
           );
         }
       } else if (startIndex !== undefined) {
-        // Explicit index provided - use it
+        // Explicit index provided - use it, start from beginning during active streaming
         actualStartIndex = startIndex;
-        // Use provided seek position if available (e.g., from EPG sync), otherwise start from beginning
-        seekToSeconds = seekPosition !== undefined ? seekPosition : 0;
+        seekToSeconds = 0; // Always start from beginning when explicitly specifying index during transitions
 
         logger.debug(
           { channelId, startIndex },
           'Starting from explicit index (active streaming transition)'
         );
       } else {
-        // No explicit index - try to sync with EPG even if not paused
-        // This ensures channel stays in sync with EPG schedule
-        try {
-          const epgPosition = await this.epgService.getCurrentPlaybackPosition(channel, media);
-          if (epgPosition) {
-            const currentIndex = channel.getMetadata().currentIndex ?? 0;
-            const indexDiff = Math.abs(epgPosition.fileIndex - currentIndex);
-            const wrappedDiff = Math.min(indexDiff, media.length - indexDiff);
-            
-            // If we're more than 1 file off from EPG, sync to EPG position
-            if (wrappedDiff > 1) {
-              actualStartIndex = epgPosition.fileIndex;
-              seekToSeconds = epgPosition.seekPosition;
-              logger.info(
-                {
-                  channelId,
-                  currentIndex,
-                  epgIndex: epgPosition.fileIndex,
-                  indexDiff: wrappedDiff,
-                  source: 'EPG sync (out of sync)',
-                },
-                'Channel out of sync with EPG, syncing to EPG position'
-              );
-            } else {
-              // Close enough - use current index
-              actualStartIndex = channel.getMetadata().currentIndex ?? 0;
-              seekToSeconds = 0;
-            }
-          } else {
-            // EPG unavailable - use current index
-            actualStartIndex = channel.getMetadata().currentIndex ?? 0;
-            seekToSeconds = 0;
-          }
-        } catch (epgError) {
-          // EPG failed - use current index
-          logger.debug({ channelId, error: epgError }, 'EPG sync failed, using current index');
+        // CRITICAL: For non-dynamic channels without virtual time, check EPG first
+        // This ensures all channels (dynamic and non-dynamic) respect EPG positioning
+        // Previously, non-dynamic channels would always start at index 0 (episode 1)
+        const epgPosition = media.length > 0 ? await this.epgService.getCurrentPlaybackPosition(channel, media) : null;
+        
+        if (epgPosition) {
+          actualStartIndex = epgPosition.fileIndex;
+          seekToSeconds = epgPosition.seekPosition;
+          
+          logger.info(
+            {
+              channelId,
+              epgIndex: actualStartIndex,
+              epgPosition: seekToSeconds,
+              method: 'EPG-based (non-dynamic channel first start)',
+              mediaCount: media.length,
+              fileAtIndex: media[actualStartIndex]?.filename,
+              fileTitle: media[actualStartIndex]?.info?.title,
+            },
+            'Starting from EPG-calculated position (non-dynamic channel respects EPG)'
+          );
+        } else {
+          // No EPG position available - use current channel index or 0
           actualStartIndex = channel.getMetadata().currentIndex ?? 0;
           seekToSeconds = 0;
+          
+          logger.debug(
+            { channelId, actualStartIndex },
+            'No EPG position available, using current channel index or defaulting to 0'
+          );
         }
       }
 
       // Initialize virtual timeline if it doesn't exist
       if (!virtualTime?.virtualStartTime) {
         await this.virtualTimeService.initializeVirtualTimeline(channelId);
+      }
+
+      // CRITICAL: Validate media is not empty before proceeding
+      if (media.length === 0) {
+        logger.error(
+          {
+            channelId,
+            actualStartIndex,
+            useDynamicPlaylist: channel.config.useDynamicPlaylist,
+          },
+          'Cannot start channel: media list is empty'
+        );
+        throw new ValidationError('Channel has no media files available. Cannot start streaming.');
       }
 
       // Validate and fix index if out of bounds (can happen when playlist changes)
@@ -932,57 +1115,29 @@ export class ChannelService {
           }
 
           let nextIndex: number;
-          let nextSeekPosition: number | undefined;
 
           // EPG as single source of truth - try EPG first
-          // Use getCurrentPlaybackPosition which correctly calculates position based on current program
           try {
-            const epgPosition = await this.epgService.getCurrentPlaybackPosition(
+            const epgFileIndex = await this.epgService.getCurrentFileIndexFromEPG(
               currentChannel,
               currentMedia
             );
 
-            if (epgPosition) {
-              // EPG determined what should be playing - use it for file selection
-              nextIndex = epgPosition.fileIndex;
+            if (epgFileIndex !== null) {
+              // EPG determined what should be playing - use it
+              nextIndex = epgFileIndex;
               
-              // Check if we're significantly off from EPG (more than 1 file difference)
-              const currentIndex = currentChannel.getMetadata().currentIndex;
-              const indexDiff = Math.abs(nextIndex - currentIndex);
-              const wrappedDiff = Math.min(indexDiff, currentMedia.length - indexDiff);
-              
-              if (wrappedDiff > 1) {
-                // Channel is significantly out of sync - use EPG seek position to catch up
-                // This handles cases where the channel has drifted far from the schedule
-                nextSeekPosition = epgPosition.seekPosition;
-                logger.warn(
-                  {
-                    channelId,
-                    currentIndex,
-                    epgIndex: nextIndex,
-                    epgSeekPosition: nextSeekPosition,
-                    indexDiff: wrappedDiff,
-                    currentFile: currentMedia[currentIndex]?.filename,
-                    epgFile: currentMedia[nextIndex]?.filename,
-                  },
-                  'Channel is significantly out of sync with EPG - syncing to EPG position (including seek)'
-                );
-              } else {
-                // Normal transition - use EPG to determine which file, but start from beginning
-                // This ensures seamless playback: end of previous show flows to start of next
-                nextSeekPosition = 0;
-                logger.info(
-                  {
-                    channelId,
-                    currentIndex: currentChannel.getMetadata().currentIndex,
-                    nextIndex,
-                    nextFile: currentMedia[nextIndex]?.filename,
-                    source: 'EPG (seamless transition)',
-                    mediaListChanged,
-                  },
-                  'Current file finished, transitioning to next file based on EPG schedule (seamless - starting from beginning)'
-                );
-              }
+              logger.info(
+                {
+                  channelId,
+                  currentIndex: currentChannel.getMetadata().currentIndex,
+                  nextIndex,
+                  nextFile: currentMedia[nextIndex]?.filename,
+                  source: 'EPG',
+                  mediaListChanged,
+                },
+                'Current file finished, transitioning to next file based on EPG schedule (single source of truth)'
+              );
             } else {
               // EPG unavailable - fall back to existing logic
               throw new Error('EPG unavailable, using fallback logic');
@@ -1119,8 +1274,9 @@ export class ChannelService {
           }
 
           // FFmpeg process has already ended, prepare for next file
-          // Small delay to ensure playlist file is released and ready for append_list
-          // This is critical - append_list requires exclusive access to the playlist file
+          // Longer delay to ensure Roku players have time to fetch the last playlist update
+          // Roku is slow at playlist refreshes, needs 1.5s minimum
+          await new Promise((resolve) => setTimeout(resolve, 1500));
           
           // Update index first (before state transition to avoid conflicts)
           currentChannel.updateCurrentIndex(nextIndex);
@@ -1208,9 +1364,6 @@ export class ChannelService {
               logger.warn({ channelId, stateError }, 'State transition issue during file transition');
             }
           }
-          
-          // Small delay to ensure previous FFmpeg fully releases playlist file
-          await new Promise((resolve) => setTimeout(resolve, 500));
 
           // === BETA APPROACH: Stream bumper as separate FFmpeg process ===
           // Seamless flow: File1 ends ? Stream Bumper ? Wait 500ms ? Start File2 ? Buffer segments
@@ -1249,6 +1402,7 @@ export class ChannelService {
                   );
 
                   // Stream bumper - blocks until finished
+                  // FFmpeg will automatically detect transition point (no file-system race condition)
                   await this.ffmpegEngine.streamBumper(channelId, bumperPath, {
                     inputFile: bumperPath,
                     outputDir: channel.config.outputDir,
@@ -1259,7 +1413,7 @@ export class ChannelService {
                     segmentDuration: channel.config.segmentDuration
                   });
 
-                  logger.info({ channelId }, 'Bumper finished, starting next file');
+                  logger.info({ channelId }, 'Bumper finished (FFmpeg handles discontinuity tags automatically)');
 
                   // Clean up bumper directory after use
                   setTimeout(async () => {
@@ -1286,16 +1440,14 @@ export class ChannelService {
               }
             }
 
-            // Short delay after bumper
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            // Longer delay after bumper for Roku to process playlist changes
+            // Roku needs time to fetch updated playlist and parse discontinuity tags
+            await new Promise((resolve) => setTimeout(resolve, 1500));
 
             // Start next file (bumper has finished)
-            logger.info(
-              { channelId, nextIndex, seekPosition: nextSeekPosition, nextFile: nextFile.filename },
-              'Starting next file after bumper'
-            );
+            logger.info({ channelId, nextIndex, nextFile: nextFile.filename }, 'Starting next file after bumper');
 
-            await this.startChannel(channelId, nextIndex, nextSeekPosition);
+            await this.startChannel(channelId, nextIndex);
 
             // Transition point for discontinuity tag injection is recorded automatically
             // when FFmpeg starts and detects a transition (first new segment written)
@@ -1312,7 +1464,7 @@ export class ChannelService {
             logger.error({ error, channelId, stack: error instanceof Error ? error.stack : undefined }, 'CRITICAL: Transition failed, attempting recovery');
             // Fallback: try to start next file
             try {
-              await this.startChannel(channelId, nextIndex, nextSeekPosition);
+              await this.startChannel(channelId, nextIndex);
               logger.info({ channelId }, 'Recovery startChannel succeeded');
             } catch (recoveryError) {
               logger.error({ error: recoveryError, channelId }, 'FATAL: Recovery startChannel also failed');
@@ -1333,51 +1485,15 @@ export class ChannelService {
           }
         }
       };
-
+      
       // Start FFmpeg for single file with callback for when file finishes
+      // FFmpeg's discont_start flag automatically handles discontinuity tags at transitions
       await this.ffmpegEngine.start(channelId, streamConfig, onFileEnd);
       
-      // Check if a transition point was recorded during stream start
-      // This happens when append_list detects a transition and records the first new segment number
-      const transitionPoint = this.ffmpegEngine.getAndClearTransitionPoint(channelId);
-      if (transitionPoint !== undefined) {
-        // Record transition point for discontinuity tag injection
-        this.playlistService.recordTransitionPoint(channelId, transitionPoint);
-        logger.debug(
-          { channelId, transitionSegment: transitionPoint },
-          'Recorded transition point for discontinuity tag injection'
-        );
-      } else {
-        // Fallback: If no transition point was recorded (e.g., waitForStreamStart timed out),
-        // but we detected this was a transition, try to read the playlist and detect the first new segment
-        // This is a best-effort fallback to handle timing issues
-        const playlistPath = path.join(streamConfig.outputDir, 'stream.m3u8');
-        try {
-          const playlistContent = await fs.readFile(playlistPath, 'utf-8');
-          const allSegments = Array.from(playlistContent.matchAll(/stream_(\d+)\.ts/g));
-          if (allSegments.length > 0) {
-            // Try to infer transition point from playlist content
-            // This is less reliable but better than missing the transition entirely
-            const lastSegmentNumber = parseInt(allSegments[allSegments.length - 1][1], 10);
-            // Record a transition point slightly ahead to ensure we catch it
-            // This is a heuristic - the actual segment might be different
-            logger.debug(
-              { channelId, inferredSegment: lastSegmentNumber + 1 },
-              'No transition point recorded during startup, inferred from playlist (fallback)'
-            );
-            // Note: We don't record this as it's unreliable - better to miss than inject incorrectly
-            // The main fix should be ensuring waitForStreamStart properly records transition points
-          }
-        } catch (error) {
-          // Playlist might not exist yet, that's OK
-          logger.debug({ channelId, error }, 'Could not read playlist for fallback transition detection');
-        }
-      }
-      
-      // NOTE: We do NOT set the next segment number here!
-      // FFmpeg will read the actual last segment from the playlist when the file ends
-      // and automatically set the next segment number = lastSegment + 1
-      // This prevents overwriting issues if our calculation is off by 1-2 segments
+      logger.info(
+        { channelId },
+        'FFmpeg started (discontinuity tags handled automatically by FFmpeg discont_start flag)'
+      );
       
       logger.info(
         {
