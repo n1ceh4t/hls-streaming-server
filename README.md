@@ -2,9 +2,26 @@
 
 An HLS/IPTV streaming server for creating multi-channel streaming services from your media library.
 
+<img width="1280" height="720" alt="Screenshot_20251112_224236" src="https://github.com/user-attachments/assets/96cd5a6f-7524-4611-9f86-2f2b33e3cbf3" />
+
+<details>
+   
+   <summary>More Images</summary>
+   <pre>
+       <img width="1920" height="986" alt="Screenshot_20251112_224331" src="https://github.com/user-attachments/assets/cad9baed-4070-4c1f-ab3c-8136056657d9" />
+       <img width="1917" height="991" alt="Screenshot_20251112_224140" src="https://github.com/user-attachments/assets/1f602d83-c2c1-4c2b-b50f-df031e8e9854" />
+       <img width="1920" height="986" alt="Screenshot_20251112_225041" src="https://github.com/user-attachments/assets/ed840f5f-7382-4072-b53d-d1bc6c61d070" />
+
+   </pre>
+</details>
+
+
+
+
 ## Features
 
 - Multi-channel HLS streaming
+- Jellyfin compatibility a priority; channel guide implemented
 - Dynamic playlists with schedule-based content switching
 - Media buckets for organizing content into collections
 - Schedule blocks for time-based programming (e.g., morning cartoons, prime time movies)
