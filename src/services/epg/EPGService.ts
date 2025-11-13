@@ -49,7 +49,8 @@ export class EPGService {
 
   /**
    * Generate EPG programs for a channel
-   * Projects the virtual timeline onto real-world time starting from NOW
+   * Projects the virtual timeline onto real-world time starting from 00:00 AM of the current day
+   * (for completeness) and extending forward by lookaheadHours (default: 48 hours)
    */
   public async generatePrograms(
     channel: Channel,
@@ -59,6 +60,15 @@ export class EPGService {
     // Use channel ID as cache key since EPG is always generated from "now" forward
     // Round startTime to nearest minute for consistency (programs start at minute boundaries)
     const roundedStartTime = this.roundToNearestMinute(startTime);
+    
+    // Generate EPG from 00:00 AM of the current day for completeness
+    // Calculate midnight of the current day
+    const now = new Date(roundedStartTime);
+    const midnightToday = new Date(now);
+    midnightToday.setHours(0, 0, 0, 0);
+    
+    // Use midnight as the actual start time for generation
+    const epgStartTime = midnightToday;
     const cacheKey = channel.id;
 
     // 1. Check database cache first (2-hour TTL)
@@ -110,30 +120,79 @@ export class EPGService {
       logger.debug({ channelId: channel.id }, 'No initial media for dynamic playlist, but will check schedule blocks during EPG generation');
     }
 
-    // Get schedule time for the channel
-    const schedulePosition = await this.scheduleTimeService.getCurrentPosition(
+    // Get schedule time for the channel at the current time (roundedStartTime)
+    // This gives us the current playback position
+    const currentSchedulePosition = await this.scheduleTimeService.getCurrentPosition(
       channel.id,
       mediaFiles,
       roundedStartTime
     );
 
+    // Calculate the position at midnight (epgStartTime) by working backwards from current position
     let fileIndex: number;
     let positionInFile: number;
 
-    if (schedulePosition) {
-      // Channel has schedule time - use calculated position
-      fileIndex = schedulePosition.fileIndex;
-      positionInFile = schedulePosition.seekPosition;
-
-      logger.debug(
-        {
-          channelId: channel.id,
-          elapsedSeconds: schedulePosition.elapsedSeconds,
-          fileIndex,
-          positionInFile
-        },
-        'Using schedule time for EPG generation'
-      );
+    if (currentSchedulePosition) {
+      // Channel has schedule time - calculate position at midnight by working backwards
+      const hoursSinceMidnight = (roundedStartTime.getTime() - epgStartTime.getTime()) / (1000 * 60 * 60);
+      const secondsSinceMidnight = hoursSinceMidnight * 3600;
+      
+      // Calculate how many seconds before current time we need to go back
+      // This is the elapsed seconds from schedule_start_time to now
+      const elapsedSecondsToNow = currentSchedulePosition.elapsedSeconds;
+      const elapsedSecondsToMidnight = elapsedSecondsToNow - secondsSinceMidnight;
+      
+      // If midnight is before schedule_start_time, we need to calculate backwards from the start
+      if (elapsedSecondsToMidnight < 0) {
+        // Midnight is before schedule started - start from beginning of playlist
+        fileIndex = 0;
+        positionInFile = 0;
+        logger.debug(
+          {
+            channelId: channel.id,
+            midnightBeforeSchedule: true,
+            elapsedSecondsToMidnight,
+            elapsedSecondsToNow,
+            secondsSinceMidnight
+          },
+          'Midnight is before schedule start - starting from beginning'
+        );
+      } else {
+        // Calculate position at midnight by working backwards through the media
+        // We'll approximate by using the schedule position calculation at midnight
+        const midnightSchedulePosition = await this.scheduleTimeService.getCurrentPosition(
+          channel.id,
+          mediaFiles,
+          epgStartTime
+        );
+        
+        if (midnightSchedulePosition) {
+          fileIndex = midnightSchedulePosition.fileIndex;
+          positionInFile = midnightSchedulePosition.seekPosition;
+          logger.debug(
+            {
+              channelId: channel.id,
+              elapsedSecondsToMidnight,
+              fileIndex,
+              positionInFile
+            },
+            'Calculated position at midnight from schedule time'
+          );
+        } else {
+          // Fallback: use current position and work backwards (simplified)
+          fileIndex = currentSchedulePosition.fileIndex;
+          positionInFile = currentSchedulePosition.seekPosition;
+          logger.debug(
+            {
+              channelId: channel.id,
+              usingCurrentPosition: true,
+              fileIndex,
+              positionInFile
+            },
+            'Using current position as fallback for midnight calculation'
+          );
+        }
+      }
     } else {
       // No schedule time - use channel metadata position or start from beginning
       fileIndex = channel.getMetadata().currentIndex || 0;
@@ -145,6 +204,7 @@ export class EPGService {
       );
     }
 
+    // End time is lookahead hours from NOW (not from midnight) to maintain 48-hour lookahead
     const endTime = new Date(roundedStartTime.getTime() + this.lookaheadHours * 60 * 60 * 1000);
 
     // Check if channel uses dynamic playlists - if so, use PlaylistResolver for consistency
@@ -155,10 +215,11 @@ export class EPGService {
         hasPlaylistResolver: !!this.playlistResolver,
         hasBucketService: !!this.bucketService,
         mediaFilesCount: mediaFiles.length,
-        startTime: roundedStartTime.toISOString(),
+        startTime: epgStartTime.toISOString(),
         endTime: endTime.toISOString(),
+        currentTime: roundedStartTime.toISOString(),
       },
-      'EPG generatePrograms: Starting program generation'
+      'EPG generatePrograms: Starting program generation (from midnight to lookahead)'
     );
 
     let programs: Program[];
@@ -170,7 +231,7 @@ export class EPGService {
         },
         'EPG generatePrograms: Using PlaylistResolver for dynamic playlist (consistent with streaming)'
       );
-      programs = await this.generateProgramsForDynamicPlaylistWithResolver(channel, roundedStartTime, endTime, fileIndex, positionInFile);
+      programs = await this.generateProgramsForDynamicPlaylistWithResolver(channel, epgStartTime, endTime, fileIndex, positionInFile);
       logger.debug(
         {
           channelId: channel.id,
@@ -189,7 +250,7 @@ export class EPGService {
         },
         'EPG generatePrograms: Using legacy method for dynamic playlist'
       );
-      programs = await this.generateProgramsForDynamicPlaylist(channel, mediaFiles, roundedStartTime, endTime, fileIndex, positionInFile);
+      programs = await this.generateProgramsForDynamicPlaylist(channel, mediaFiles, epgStartTime, endTime, fileIndex, positionInFile);
       logger.debug(
         {
           channelId: channel.id,
@@ -208,7 +269,7 @@ export class EPGService {
         },
         'EPG generatePrograms: Using static playlist generation'
       );
-      programs = await this.generateProgramsForStaticPlaylist(channel, mediaFiles, roundedStartTime, endTime, fileIndex, positionInFile);
+      programs = await this.generateProgramsForStaticPlaylist(channel, mediaFiles, epgStartTime, endTime, fileIndex, positionInFile);
       logger.debug(
         {
           channelId: channel.id,

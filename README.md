@@ -11,7 +11,7 @@ An HLS/IPTV streaming server for creating multi-channel streaming services from 
 - Progressive playback mode for sequential series progression across days
 - IPTV support with M3U playlists and XMLTV EPG generation
 - Schedule time tracking for continuous playback positioning
-- Automatic media library scanning and organization
+- Manual and automatic media library scanning (automatic scanning disabled by default)
 - API key and session-based authentication
 - Admin web interface for channel and media management
 - Docker deployment support
@@ -362,6 +362,8 @@ The server uses a `.env` file for configuration. You can either:
 
 2. **Manually edit `.env`** (copy from `.env.example`)
 
+**Settings Precedence**: Settings configured via the Admin UI (stored in the database) **take precedence** over `.env` file values. If a setting exists in the database, the `.env` value is ignored. This allows you to change settings at runtime without restarting the server.
+
 ### Essential Settings
 
 Edit `.env` file with your configuration:
@@ -387,6 +389,12 @@ DEFAULT_RESOLUTION=1920x1080       # 1080p
 DEFAULT_FPS=30
 DEFAULT_SEGMENT_DURATION=6         # 6 seconds per segment
 
+# FFmpeg encoding preset (affects quality vs speed)
+# Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+# Default: 'fast' (good balance of quality and speed)
+# Faster presets = lower quality (more blocky), slower = better quality but more CPU
+FFMPEG_PRESET=fast
+
 # Concurrent streams
 MAX_CONCURRENT_STREAMS=8
 ```
@@ -406,6 +414,29 @@ HW_ACCEL=videotoolbox
 # Software encoding (default)
 HW_ACCEL=none
 ```
+
+### Library Scanning
+
+Automatic library scanning is **disabled by default**. To enable it:
+
+**Option 1: Via Admin UI (Recommended)**
+- Navigate to Settings (⚙️ icon in top-right) → Enable "Automatic Library Scanning"
+- This saves the setting to the database and takes precedence over `.env`
+
+**Option 2: Via `.env` file**
+```env
+# Enable automatic library scanning
+ENABLE_AUTO_SCAN=true
+
+# Set scan interval (in minutes)
+AUTO_SCAN_INTERVAL=60
+```
+
+**Precedence**: Settings saved via Admin UI (stored in database) **take precedence** over `.env` file values. If a setting exists in the database, the `.env` value is ignored.
+
+**Note**: Even with automatic scanning disabled, you can manually scan libraries via:
+- **Admin UI**: Navigate to Libraries tab → Click "Scan" button
+- **API**: `POST /api/libraries/{libraryId}/scan`
 
 See `.env.example` for all available configuration options.
 
@@ -488,11 +519,13 @@ curl -X POST http://localhost:8080/api/libraries \
   }'
 ```
 
-2. **Scan for media:**
+2. **Scan for media** (manual scan - automatic scanning is disabled by default):
 ```bash
 curl -X POST http://localhost:8080/api/libraries/{libraryId}/scan \
   -H "X-API-Key: your-api-key"
 ```
+
+**Note**: Automatic library scanning is disabled by default. You can enable it in Settings (Admin UI) or by setting `ENABLE_AUTO_SCAN=true` in your `.env` file.
 
 ### Creating Media Buckets
 
@@ -864,6 +897,12 @@ DEFAULT_VIDEO_BITRATE=3000000      # 3 Mbps (high)
 DEFAULT_RESOLUTION=1280x720        # 720p (faster)
 DEFAULT_RESOLUTION=1920x1080       # 1080p (default)
 DEFAULT_FPS=24                     # Lower FPS = less CPU
+
+# FFmpeg preset (most important for quality)
+FFMPEG_PRESET=fast                 # Default: good balance (less blocky than veryfast)
+FFMPEG_PRESET=medium               # Better quality, more CPU
+FFMPEG_PRESET=veryfast             # Faster encoding, but can cause blocky video
+FFMPEG_PRESET=ultrafast            # Fastest, but very blocky (not recommended)
 ```
 
 ### Concurrent Stream Limits

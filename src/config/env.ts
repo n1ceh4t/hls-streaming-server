@@ -73,7 +73,7 @@ const envSchema = z.object({
   HW_ACCEL: z.enum(['nvenc', 'qsv', 'videotoolbox', 'none']).default('none'),
   FFMPEG_PRESET: z
     .enum(['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'])
-    .default('veryfast'),
+    .default('fast'), // Changed from 'veryfast' to 'fast' for better quality (less blocky video)
 
   // Advanced
   SEGMENT_CLEANUP_INTERVAL: z.coerce.number().positive().default(30),

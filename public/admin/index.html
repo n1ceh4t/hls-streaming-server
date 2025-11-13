@@ -233,6 +233,9 @@
             background: var(--bg-secondary);
             border-bottom: 1px solid var(--border);
             overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
         }
 
         .content-header h2 {
@@ -243,6 +246,28 @@
             overflow-wrap: break-word;
             overflow: hidden;
             text-overflow: ellipsis;
+            margin: 0;
+        }
+
+        .settings-icon {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 8px;
+            border-radius: var(--radius);
+            transition: var(--transition);
+            font-size: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+        }
+
+        .settings-icon:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
         }
 
         .content-body {
@@ -1321,6 +1346,7 @@
             <main class="main-content">
                 <div class="content-header">
                     <h2 id="pageTitle">Dashboard</h2>
+                    <button class="settings-icon" onclick="openSettingsModal()" title="Settings">⚙️</button>
                 </div>
                 <div class="content-body">
 
@@ -3127,6 +3153,27 @@
             
             html += '</div>';
             container.innerHTML = html;
+            
+            // Scroll to current time if viewing today
+            if (showCurrentTime) {
+                setTimeout(() => {
+                    // Find the first timeline track to get dimensions
+                    const firstTimelineTrack = container.querySelector('.epg-timeline-track');
+                    if (firstTimelineTrack) {
+                        const trackWidth = firstTimelineTrack.scrollWidth;
+                        const scrollPosition = (currentTimeOffset / 100) * trackWidth;
+                        
+                        // Scroll all timeline tracks to the current time
+                        const allTracks = container.querySelectorAll('.epg-timeline-track');
+                        allTracks.forEach(track => {
+                            (track as HTMLElement).scrollTo({
+                                left: Math.max(0, scrollPosition - (track as HTMLElement).clientWidth / 2),
+                                behavior: 'smooth'
+                            });
+                        });
+                    }
+                }, 100);
+            }
         }
         
         function escapeHtml(text) {
@@ -5310,6 +5357,205 @@
                 if (i === index + 1) return playlistBlocks[index].id;
                 return b.id;
             }));
+        }
+
+        // Settings Modal Functions
+        async function openSettingsModal() {
+            const modal = document.createElement('div');
+            modal.className = 'admin-modal';
+            modal.id = 'settingsModal';
+            modal.onclick = function(e) {
+                if (e.target === modal) {
+                    closeSettingsModal();
+                }
+            };
+
+            const modalContent = document.createElement('div');
+            modalContent.className = 'admin-modal-content';
+            modalContent.style.maxWidth = '600px';
+            modalContent.onclick = function(e) {
+                e.stopPropagation();
+            };
+
+            // Load current settings
+            let currentSettings = {};
+            try {
+                const res = await fetch(`${API_BASE}/api/settings`, {
+                    credentials: 'include',
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    currentSettings = data.data || {};
+                }
+            } catch (error) {
+                console.error('Failed to load settings:', error);
+            }
+
+            const currentPreset = currentSettings.ffmpeg_preset || 'fast';
+            const currentLogLevel = currentSettings.log_level || 'info';
+            const currentHwAccel = currentSettings.hw_accel || 'none';
+            const currentMaxStreams = currentSettings.max_concurrent_streams || '8';
+            const currentEnableAutoScan = currentSettings.enable_auto_scan !== 'false';
+            const currentAutoScanInterval = currentSettings.auto_scan_interval || '60';
+            const currentGracePeriod = currentSettings.viewer_disconnect_grace_period || '45';
+
+            modalContent.innerHTML = `
+                <div class="admin-modal-header">
+                    <h3>Server Settings</h3>
+                </div>
+                <div class="admin-modal-body" style="max-height: 70vh; overflow-y: auto;">
+                    <h4 style="color: var(--text-primary); margin-bottom: 15px; margin-top: 0; border-bottom: 1px solid var(--border); padding-bottom: 8px;">FFmpeg Settings</h4>
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text-primary); font-weight: 600;">
+                            FFmpeg Encoding Preset
+                        </label>
+                        <select id="settingsFFmpegPreset" style="width: 100%; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius); font-size: 14px;">
+                            <option value="ultrafast" ${currentPreset === 'ultrafast' ? 'selected' : ''}>Ultrafast (Fastest, Lowest Quality)</option>
+                            <option value="superfast" ${currentPreset === 'superfast' ? 'selected' : ''}>Superfast</option>
+                            <option value="veryfast" ${currentPreset === 'veryfast' ? 'selected' : ''}>Veryfast</option>
+                            <option value="faster" ${currentPreset === 'faster' ? 'selected' : ''}>Faster</option>
+                            <option value="fast" ${currentPreset === 'fast' ? 'selected' : ''}>Fast (Recommended)</option>
+                            <option value="medium" ${currentPreset === 'medium' ? 'selected' : ''}>Medium</option>
+                            <option value="slow" ${currentPreset === 'slow' ? 'selected' : ''}>Slow</option>
+                            <option value="slower" ${currentPreset === 'slower' ? 'selected' : ''}>Slower</option>
+                            <option value="veryslow" ${currentPreset === 'veryslow' ? 'selected' : ''}>Veryslow (Slowest, Highest Quality)</option>
+                        </select>
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px;">
+                            Controls encoding speed vs quality trade-off. Faster presets use less CPU but produce lower quality video. 
+                            Slower presets produce better quality but require more CPU. Changes take effect on next stream start.
+                        </small>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text-primary); font-weight: 600;">
+                            Hardware Acceleration
+                        </label>
+                        <select id="settingsHwAccel" style="width: 100%; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius); font-size: 14px;">
+                            <option value="none" ${currentHwAccel === 'none' ? 'selected' : ''}>None (Software Encoding)</option>
+                            <option value="nvenc" ${currentHwAccel === 'nvenc' ? 'selected' : ''}>NVENC (NVIDIA GPU)</option>
+                            <option value="qsv" ${currentHwAccel === 'qsv' ? 'selected' : ''}>QSV (Intel Quick Sync)</option>
+                            <option value="videotoolbox" ${currentHwAccel === 'videotoolbox' ? 'selected' : ''}>VideoToolbox (Apple/Mac)</option>
+                        </select>
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px;">
+                            Hardware acceleration can significantly improve encoding performance. Requires compatible hardware and may require server restart.
+                        </small>
+                    </div>
+
+                    <h4 style="color: var(--text-primary); margin-bottom: 15px; margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">Streaming Settings</h4>
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text-primary); font-weight: 600;">
+                            Max Concurrent Streams
+                        </label>
+                        <input type="number" id="settingsMaxStreams" min="1" max="100" value="${currentMaxStreams}"
+                               style="width: 100%; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius); font-size: 14px;">
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px;">
+                            Maximum number of channels that can stream simultaneously. Higher values require more CPU and bandwidth.
+                        </small>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text-primary); font-weight: 600;">
+                            Viewer Disconnect Grace Period (seconds)
+                        </label>
+                        <input type="number" id="settingsGracePeriod" min="1" value="${currentGracePeriod}"
+                               style="width: 100%; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius); font-size: 14px;">
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px;">
+                            How long to wait after the last viewer disconnects before pausing the stream. Prevents unnecessary restarts from brief disconnections.
+                        </small>
+                    </div>
+
+                    <h4 style="color: var(--text-primary); margin-bottom: 15px; margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">Library Settings</h4>
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: flex; align-items: center; gap: 10px; color: var(--text-primary); font-weight: 600; cursor: pointer;">
+                            <input type="checkbox" id="settingsEnableAutoScan" ${currentEnableAutoScan ? 'checked' : ''}
+                                   style="width: 18px; height: 18px; cursor: pointer;">
+                            <span>Enable Automatic Library Scanning</span>
+                        </label>
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px; margin-left: 28px;">
+                            Automatically scan libraries for new media files at the specified interval.
+                        </small>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text-primary); font-weight: 600;">
+                            Auto Scan Interval (minutes)
+                        </label>
+                        <input type="number" id="settingsAutoScanInterval" min="1" value="${currentAutoScanInterval}"
+                               style="width: 100%; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius); font-size: 14px;">
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px;">
+                            How often to automatically scan libraries for new media files (in minutes). Only applies if auto scan is enabled.
+                        </small>
+                    </div>
+
+                    <h4 style="color: var(--text-primary); margin-bottom: 15px; margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">Logging Settings</h4>
+                    <div class="form-group" style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 8px; color: var(--text-primary); font-weight: 600;">
+                            Log Level
+                        </label>
+                        <select id="settingsLogLevel" style="width: 100%; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius); font-size: 14px;">
+                            <option value="fatal" ${currentLogLevel === 'fatal' ? 'selected' : ''}>Fatal (Errors only)</option>
+                            <option value="error" ${currentLogLevel === 'error' ? 'selected' : ''}>Error</option>
+                            <option value="warn" ${currentLogLevel === 'warn' ? 'selected' : ''}>Warn</option>
+                            <option value="info" ${currentLogLevel === 'info' ? 'selected' : ''}>Info (Recommended)</option>
+                            <option value="debug" ${currentLogLevel === 'debug' ? 'selected' : ''}>Debug</option>
+                            <option value="trace" ${currentLogLevel === 'trace' ? 'selected' : ''}>Trace (Most verbose)</option>
+                        </select>
+                        <small style="color: var(--text-muted); display: block; margin-top: 6px;">
+                            Controls the verbosity of log output. Higher levels provide more detail but generate more log data.
+                        </small>
+                    </div>
+                </div>
+                <div class="admin-modal-footer" style="display: flex; gap: 12px; justify-content: flex-end;">
+                    <button type="button" class="btn btn-small" onclick="closeSettingsModal()">Cancel</button>
+                    <button type="button" class="btn btn-small btn-success" onclick="saveSettings()">Save Settings</button>
+                </div>
+            `;
+
+            modal.appendChild(modalContent);
+            document.body.appendChild(modal);
+        }
+
+        function closeSettingsModal() {
+            const modal = document.getElementById('settingsModal');
+            if (modal) {
+                modal.remove();
+            }
+        }
+
+        async function saveSettings() {
+            try {
+                const presetSelect = document.getElementById('settingsFFmpegPreset');
+                const hwAccelSelect = document.getElementById('settingsHwAccel');
+                const logLevelSelect = document.getElementById('settingsLogLevel');
+                const maxStreamsInput = document.getElementById('settingsMaxStreams');
+                const enableAutoScanCheckbox = document.getElementById('settingsEnableAutoScan');
+                const autoScanIntervalInput = document.getElementById('settingsAutoScanInterval');
+                const gracePeriodInput = document.getElementById('settingsGracePeriod');
+
+                const settings = {};
+                if (presetSelect) settings.ffmpegPreset = presetSelect.value;
+                if (hwAccelSelect) settings.hwAccel = hwAccelSelect.value;
+                if (logLevelSelect) settings.logLevel = logLevelSelect.value;
+                if (maxStreamsInput) settings.maxConcurrentStreams = parseInt(maxStreamsInput.value, 10);
+                if (enableAutoScanCheckbox) settings.enableAutoScan = enableAutoScanCheckbox.checked;
+                if (autoScanIntervalInput) settings.autoScanInterval = parseInt(autoScanIntervalInput.value, 10);
+                if (gracePeriodInput) settings.viewerDisconnectGracePeriod = parseInt(gracePeriodInput.value, 10);
+
+                const res = await fetch(`${API_BASE}/api/settings`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify(settings),
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Settings saved successfully! Some changes may require a server restart to take full effect.');
+                    closeSettingsModal();
+                } else {
+                    alert(data.error?.message || 'Failed to save settings');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to save settings:', error);
+            }
         }
 
         async function reorderBlocks(blockIds) {

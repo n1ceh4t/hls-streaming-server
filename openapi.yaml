@@ -52,6 +52,8 @@ tags:
     description: Media bucket (collection) management
   - name: Schedules
     description: Schedule blocks for dynamic playlists
+  - name: Settings
+    description: Global server settings management
 
 components:
   securitySchemes:
@@ -385,6 +387,27 @@ components:
           type: string
         description:
           type: string
+
+    Settings:
+      type: object
+      description: Global server settings
+      properties:
+        ffmpeg_preset:
+          type: string
+          enum: [ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow]
+          description: FFmpeg encoding preset (controls speed vs quality trade-off)
+          example: "fast"
+      additionalProperties:
+        type: string
+
+    UpdateSettingsRequest:
+      type: object
+      properties:
+        ffmpegPreset:
+          type: string
+          enum: [ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow]
+          description: FFmpeg encoding preset (controls speed vs quality trade-off)
+          example: "fast"
 
 paths:
   # === HEALTH ===
@@ -791,6 +814,65 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiResponse'
+
+  /api/channels/{channelId}/schedule-time:
+    put:
+      tags: [Channels]
+      summary: Update channel schedule start time
+      description: Updates the schedule_start_time for a channel, which affects EPG positioning and playback position calculation
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      parameters:
+        - name: channelId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scheduleStartTime:
+                  type: string
+                  format: date-time
+                  description: ISO 8601 datetime string for the schedule start time
+                  example: "2024-01-01T00:00:00Z"
+              required:
+                - scheduleStartTime
+      responses:
+        '200':
+          description: Schedule start time updated successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          scheduleStartTime:
+                            type: string
+                            format: date-time
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Channel not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/channels/{channelId}/media:
     get:
@@ -1286,6 +1368,29 @@ paths:
                         items:
                           $ref: '#/components/schemas/MediaFile'
 
+  /api/media/count:
+    get:
+      tags: [Media]
+      summary: Get total media file count
+      description: Returns the total count of all media files in the database
+      responses:
+        '200':
+          description: Total media count
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          totalCount:
+                            type: integer
+                            description: Total number of media files
+                            example: 1234
+
   /api/media/series:
     get:
       tags: [Media]
@@ -1736,3 +1841,86 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiResponse'
+
+  # === SETTINGS ===
+  /api/settings:
+    get:
+      tags: [Settings]
+      summary: Get all global settings
+      description: Returns all global server settings (e.g., FFmpeg preset)
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      responses:
+        '200':
+          description: Settings retrieved successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Settings'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags: [Settings]
+      summary: Update global settings
+      description: |
+        Update global server settings. Changes take effect on next stream start.
+        
+        **FFmpeg Preset Options:**
+        - `ultrafast`: Fastest encoding, lowest quality
+        - `superfast`: Very fast encoding, low quality
+        - `veryfast`: Fast encoding, lower quality
+        - `faster`: Faster encoding, moderate quality
+        - `fast`: Fast encoding, good quality (recommended)
+        - `medium`: Balanced encoding speed and quality
+        - `slow`: Slower encoding, higher quality
+        - `slower`: Very slow encoding, high quality
+        - `veryslow`: Slowest encoding, highest quality
+      security:
+        - ApiKeyAuth: []
+        - BearerAuth: []
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSettingsRequest'
+      responses:
+        '200':
+          description: Settings updated successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Settings'
+                      message:
+                        type: string
+                        example: "Settings updated successfully"
+        '400':
+          description: Validation error (invalid preset value)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

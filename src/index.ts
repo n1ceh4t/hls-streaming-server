@@ -20,10 +20,12 @@ import { createBucketRoutes } from './api/routes/buckets';
 import { createLibraryRoutes } from './api/routes/libraries';
 import { createAuthRoutes } from './api/routes/auth';
 import { createScheduleRoutes } from './api/routes/schedules';
+import { createSettingsRoutes } from './api/routes/settings';
 import { MediaBucketService } from './services/bucket/MediaBucketService';
 import { LibraryService } from './services/library/LibraryService';
 import { AuthService } from './services/auth/AuthService';
 import { PlaylistResolver } from './services/playlist/PlaylistResolver';
+import { SettingsService } from './services/settings/SettingsService';
 import { Database } from './infrastructure/database/Database';
 import path from 'path';
 import fs from 'fs/promises';
@@ -38,6 +40,7 @@ class Application {
   private bucketService!: MediaBucketService;
   private libraryService!: LibraryService;
   private authService!: AuthService;
+  private settingsService!: SettingsService;
   private statePersistence!: StatePersistence;
 
   constructor() {
@@ -107,8 +110,14 @@ class Application {
     await fs.mkdir(config.paths.hlsOutput, { recursive: true });
     await fs.mkdir(config.paths.temp, { recursive: true });
 
+    // Initialize settings service first (needed by FFmpegEngine)
+    this.settingsService = new SettingsService();
+    
     // Initialize services
     this.ffmpegEngine = new FFmpegEngine();
+    
+    // Set settings service for FFmpegEngine to read preset from database
+    this.ffmpegEngine.setSettingsService(this.settingsService);
     
     // Kill any orphaned FFmpeg processes from previous runs
     const orphanedCount = this.ffmpegEngine.killOrphanedProcesses();
@@ -211,6 +220,9 @@ class Application {
 
     // Schedule routes (API)
     this.app.use('/api/schedules', createScheduleRoutes(this.authService, this.channelService));
+
+    // Settings routes (API)
+    this.app.use('/api/settings', createSettingsRoutes(this.authService));
 
     // Streaming routes (public)
     this.app.use('/', createStreamingRoutes(this.channelService));

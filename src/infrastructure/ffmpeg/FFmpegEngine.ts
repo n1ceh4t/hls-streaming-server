@@ -5,6 +5,7 @@ import { execSync } from 'child_process';
 import { config } from '../../config/env';
 import { createLogger } from '../../utils/logger';
 import { FFmpegError } from '../../utils/errors';
+import { SettingsService } from '../../services/settings/SettingsService';
 
 const logger = createLogger('FFmpegEngine');
 
@@ -35,8 +36,57 @@ export interface StreamHandle {
 
 export class FFmpegEngine {
   private activeStreams: Map<string, StreamHandle> = new Map();
+  private settingsService?: SettingsService;
+  private presetCache?: string;
+  private presetCacheTime?: number;
   // With append_list flag: FFmpeg automatically manages segment numbering from existing playlist
   // All files are re-encoded to identical parameters, so discontinuity tags may not be needed
+
+  /**
+   * Set settings service for reading FFmpeg preset from database
+   */
+  public setSettingsService(settingsService: SettingsService): void {
+    this.settingsService = settingsService;
+    // Clear cache when settings service is set
+    this.presetCache = undefined;
+    this.presetCacheTime = undefined;
+  }
+
+  /**
+   * Get FFmpeg preset (from DB settings with fallback to env/config)
+   * Caches for 30 seconds to avoid excessive DB queries
+   */
+  private async getPreset(): Promise<string> {
+    const now = Date.now();
+    const cacheTimeout = 30000; // 30 seconds
+
+    // Return cached value if still valid
+    if (this.presetCache && this.presetCacheTime && (now - this.presetCacheTime) < cacheTimeout) {
+      return this.presetCache;
+    }
+
+    // Try to get from settings service (database)
+    if (this.settingsService) {
+      try {
+        const preset = await this.settingsService.getFFmpegPreset();
+        this.presetCache = preset;
+        this.presetCacheTime = now;
+        return preset;
+      } catch (error: any) {
+        // Only log warning if it's not a "table doesn't exist" error (migration not run)
+        if (error?.code !== '42P01') {
+          logger.warn({ error }, 'Failed to get preset from settings, using config fallback');
+        }
+        // Fall through to config fallback
+      }
+    }
+
+    // Fallback to config (env var)
+    const preset = config.ffmpeg.preset;
+    this.presetCache = preset;
+    this.presetCacheTime = now;
+    return preset;
+  }
 
   /**
    * Start HLS streaming for a channel
@@ -143,11 +193,8 @@ export class FFmpegEngine {
       await new Promise(resolve => setTimeout(resolve, 200));
     }
 
-    // Use fast preset for initial/transition starts to reduce segment generation time
-    const useFastPreset = isTransition;
-
-    // Create FFmpeg command for single file
-    const command = this.createCommand(streamConfig, useFastPreset);
+    // Create FFmpeg command
+    const command = await this.createCommand(streamConfig);
 
       // Create stream handle
       const handle: StreamHandle = {
@@ -396,10 +443,9 @@ export class FFmpegEngine {
    * Create FFmpeg command for HLS streaming
    * Uses concat demuxer for seamless transitions, or single file input (legacy)
    */
-  private createCommand(
-    streamConfig: StreamConfig,
-    useFastPreset: boolean = false
-  ): FfmpegCommand {
+  private async createCommand(
+    streamConfig: StreamConfig
+  ): Promise<FfmpegCommand> {
     // Use concat file if provided, otherwise fall back to single file input (legacy)
     let command: FfmpegCommand;
     
@@ -455,14 +501,14 @@ export class FFmpegEngine {
     // Instead, let -fps_mode cfr handle frame rate conversion
     // command.fps(streamConfig.fps); // REMOVED: Conflicts with -fps_mode cfr
 
-    // Use configurable encoder preset (from environment variable FFMPEG_PRESET)
-    // For transitions, use ultrafast to reduce encoding delay
+    // Use configurable encoder preset (from settings/DB or environment variable FFMPEG_PRESET)
     // Valid presets: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
     // Trade-off: faster presets = lower quality but faster encoding, slower = better quality but slower
-    const encoderPreset = useFastPreset ? 'ultrafast' : config.ffmpeg.preset;
-    command.outputOptions(['-preset', encoderPreset]);
+    // Note: Preset is now configured via admin UI or .env, not dynamically changed
+    const preset = await this.getPreset();
+    command.outputOptions(['-preset', preset]);
     logger.debug(
-      { preset: encoderPreset, isTransition: useFastPreset, originalPreset: config.ffmpeg.preset },
+      { preset, source: this.settingsService ? 'database' : 'config' },
       'FFmpeg encoder preset configured'
     );
 
@@ -470,7 +516,10 @@ export class FFmpegEngine {
     command.audioCodec('aac');
 
     // Explicit stream mapping (map only video and audio, skip subtitles)
-    // This helps avoid issues with files that have subtitle streams
+    // Use 0:a? to map all audio streams (optional - won't fail if none exist)
+    // FFmpeg will automatically skip problematic audio streams and use working ones
+    // If a specific stream has decoder errors, FFmpeg will try other audio streams
+    // The ? makes it optional so FFmpeg continues even if all audio streams fail
     command.outputOptions(['-map', '0:v:0', '-map', '0:a?', '-sn']);
 
     // HLS options
@@ -599,6 +648,30 @@ export class FFmpegEngine {
         if (typeof line === 'string') {
           const l = line.trim();
           stderrLines.push(l);
+          
+          // Filter out known non-fatal warnings that don't affect playback
+          const nonFatalPatterns = [
+            /Error submitting packet to decoder: Invalid data found when processing input/i,
+            /Could not find codec parameters for stream/i,
+            /VBV underflow/i, // Video buffer underflow (common, non-fatal)
+            /deprecated pixel format/i,
+            /Past duration/i, // PTS/DTS warnings
+          ];
+          
+          const isNonFatal = nonFatalPatterns.some(pattern => pattern.test(l));
+          if (isNonFatal) {
+            // Still capture for debugging, but don't log as warning
+            // Note: Audio decoder errors may cause that specific stream to be skipped
+            // FFmpeg will use other audio streams if available, or continue with video only
+            logger.debug({ channelId, line: l }, '[ffmpeg stderr] (non-fatal)');
+            return;
+          }
+          
+          // Check for audio stream mapping info (to verify audio is being used)
+          if (/Stream.*Audio|Audio:.*aac|Stream #0:.*Audio/i.test(l)) {
+            logger.debug({ channelId, line: l }, '[ffmpeg] Audio stream info');
+          }
+          
           // Log important FFmpeg messages for debugging
           if (l && /Error|error|ERROR|warning|Warning|WARNING|failed|Failed|FAILED|invalid|Invalid|INVALID/i.test(l)) {
             logger.warn({ channelId, line: l }, '[ffmpeg stderr]');

@@ -46,7 +46,7 @@ services:
       # Features
       ENABLE_EPG: "true"
       ENABLE_ANALYTICS: "true"
-      ENABLE_AUTO_SCAN: "true"
+      ENABLE_AUTO_SCAN: "false"
       AUTO_SCAN_INTERVAL: 60
 
       # Logging

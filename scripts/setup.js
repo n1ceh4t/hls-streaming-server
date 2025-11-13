@@ -326,6 +326,53 @@ async function setup() {
     '4': 'videotoolbox',
   };
 
+  // FFmpeg preset
+  console.log('\n🎥 FFmpeg Encoding Preset');
+  console.log('Controls encoding speed vs quality trade-off');
+  console.log('1. Ultrafast (Fastest, Lowest Quality)');
+  console.log('2. Superfast');
+  console.log('3. Veryfast');
+  console.log('4. Faster');
+  console.log('5. Fast (Recommended) [Default]');
+  console.log('6. Medium');
+  console.log('7. Slow');
+  console.log('8. Slower');
+  console.log('9. Veryslow (Slowest, Highest Quality)');
+  const presetChoice = await question('Select preset (1-9): ') || '5';
+
+  const presetMap = {
+    '1': 'ultrafast',
+    '2': 'superfast',
+    '3': 'veryfast',
+    '4': 'faster',
+    '5': 'fast',
+    '6': 'medium',
+    '7': 'slow',
+    '8': 'slower',
+    '9': 'veryslow',
+  };
+  const ffmpegPreset = presetMap[presetChoice] || 'fast';
+
+  // Log level
+  console.log('\n📋 Logging');
+  console.log('1. Fatal (Errors only)');
+  console.log('2. Error');
+  console.log('3. Warn');
+  console.log('4. Info (Recommended) [Default]');
+  console.log('5. Debug');
+  console.log('6. Trace (Most verbose)');
+  const logLevelChoice = await question('Select log level (1-6): ') || '4';
+
+  const logLevelMap = {
+    '1': 'fatal',
+    '2': 'error',
+    '3': 'warn',
+    '4': 'info',
+    '5': 'debug',
+    '6': 'trace',
+  };
+  const logLevel = logLevelMap[logLevelChoice] || 'info';
+
   // Database configuration
   console.log('\n🗄️  Database Configuration');
   console.log('⚠️  PostgreSQL is required for all features (channels, media, scheduling, EPG)');
@@ -425,17 +472,18 @@ RATE_LIMIT_WINDOW_MS=900000
 # Feature Flags
 ENABLE_EPG=true
 ENABLE_ANALYTICS=true
-ENABLE_AUTO_SCAN=true
+ENABLE_AUTO_SCAN=false
 AUTO_SCAN_INTERVAL=60
 
 # Logging
-LOG_LEVEL=info
+LOG_LEVEL=${logLevel}
 LOG_FORMAT=pretty
 
 # FFmpeg Configuration
 FFMPEG_PATH=/usr/bin/ffmpeg
 FFPROBE_PATH=/usr/bin/ffprobe
 HW_ACCEL=${hwAccelMap[hwAccel] || 'none'}
+FFMPEG_PRESET=${ffmpegPreset}
 
 # Advanced
 SEGMENT_CLEANUP_INTERVAL=30
@@ -462,6 +510,8 @@ DB_SSL=${dbUseSsl}` : '# Database disabled - configure DB_* variables to enable'
   console.log(`   Server port: ${port}`);
   console.log(`   Quality: ${selectedQuality.resolution}`);
   console.log(`   Hardware acceleration: ${hwAccelMap[hwAccel] || 'none'}`);
+  console.log(`   FFmpeg preset: ${ffmpegPreset}`);
+  console.log(`   Log level: ${logLevel}`);
   console.log(`   API Key: ${apiKey.substring(0, 10)}...`);
   if (useDatabase.toLowerCase() !== 'n') {
     console.log(`   Database: ${dbUser}@${dbHost}:${dbPort}/${dbName}`);
