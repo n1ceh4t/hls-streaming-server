@@ -1090,9 +1090,16 @@ export class ChannelService {
         this.earlyStartTimers.delete(channelId);
       }
 
+      // NOTE: Early start logic disabled for concat approach
+      // With concat demuxer, FFmpeg handles transitions automatically through the concat file
+      // Early start would cause unnecessary FFmpeg restarts and frame duplication errors
+      // The concat file already includes all files and bumpers, so no early start needed
+      const useConcatApproach = true; // All streams now use concat approach
+      
       // Schedule next file to start 6 seconds before current file ends (if remaining duration > 6 seconds)
       // Add 1 second buffer to account for timing variations and ensure segments are ready
-      if (remainingDuration > 7 && !isTransition) {
+      // DISABLED: Early start not needed with concat approach - FFmpeg handles transitions automatically
+      if (false && remainingDuration > 7 && !isTransition && !useConcatApproach) {
         const earlyStartDelay = Math.max(0, (remainingDuration - 7) * 1000); // milliseconds (7s = 6s target + 1s buffer)
         const earlyStartTimer = setTimeout(async () => {
           try {
@@ -1689,6 +1696,9 @@ export class ChannelService {
         // NOTE: No longer advancing virtual time - position calculated on-demand from schedule_start_time
 
           // Regenerate bumper for the NEXT file (when this one ends)
+          // The concat file references the same bumper.mp4 path multiple times
+          // We overwrite the file content with fresh "Up Next" info for each episode
+          // FFmpeg can handle file overwrites as long as we do it atomically (which generateBumperMP4 does)
           const nextFileIndex = (currentFileIndex + 1) % mediaFiles.length;
           const nextFile = mediaFiles[nextFileIndex];
           const includeBumpers = channel.config.includeBumpers !== false;
@@ -1698,6 +1708,10 @@ export class ChannelService {
             const outputDir = path.resolve(channel.config.outputDir);
             const bumperPath = this.concatFileManager.getBumperPath(outputDir);
             try {
+              // Regenerate bumper with content for the next episode
+              // This overwrites the existing bumper.mp4 file that FFmpeg will read next
+              // FFmpeg reads files on-demand, so regenerating now ensures the correct content
+              // is ready when FFmpeg reaches the bumper in the concat sequence
               await this.bumperGenerator.generateBumperMP4(
                 {
                   showName: nextFile.info.showName,
@@ -1715,14 +1729,15 @@ export class ChannelService {
                   channelId,
                   currentFile: mediaFiles[currentFileIndex]?.filename,
                   nextFile: nextFile.filename,
-                  bumperPath
+                  bumperPath,
+                  note: 'Bumper regenerated for next episode - FFmpeg will read this when it reaches the bumper in concat sequence'
                 },
                 'Regenerated bumper MP4 for next episode'
               );
             } catch (error) {
               logger.warn(
                 { channelId, error, nextFile: nextFile.filename },
-                'Failed to regenerate bumper (non-fatal)'
+                'Failed to regenerate bumper (non-fatal - old bumper will be used)'
               );
             }
           }
