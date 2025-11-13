@@ -73,6 +73,9 @@ data/state.backup.json
 docs-archive.tar.gz
 docs-archive.zip
 
+# Code review reports (generated, not for version control)
+CODE_REVIEW.md
+
 # MCP Server
 mcp-server/.env
 mcp-server/dist/

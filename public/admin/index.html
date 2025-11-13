@@ -3166,8 +3166,8 @@
                         // Scroll all timeline tracks to the current time
                         const allTracks = container.querySelectorAll('.epg-timeline-track');
                         allTracks.forEach(track => {
-                            (track as HTMLElement).scrollTo({
-                                left: Math.max(0, scrollPosition - (track as HTMLElement).clientWidth / 2),
+                            track.scrollTo({
+                                left: Math.max(0, scrollPosition - track.clientWidth / 2),
                                 behavior: 'smooth'
                             });
                         });

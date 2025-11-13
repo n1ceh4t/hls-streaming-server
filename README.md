@@ -503,6 +503,130 @@ Web Browser Example:
 </script>
 ```
 
+### Setting Up Jellyfin Live TV
+
+Jellyfin can use this HLS server as an IPTV source, giving you a live TV experience with electronic program guide (EPG) support.
+
+#### Prerequisites
+
+- Jellyfin server installed and running
+- HLS Streaming Server running and accessible from Jellyfin
+- At least one channel created and started
+
+#### Step 1: Install the Live TV Plugin
+
+1. Open Jellyfin Dashboard
+2. Navigate to **Plugins** → **Catalog**
+3. Find and install **"Live TV"** plugin (comes pre-installed in most Jellyfin versions)
+4. Restart Jellyfin if prompted
+
+#### Step 2: Add M3U Tuner
+
+1. Go to **Dashboard** → **Live TV** → **Tuner Devices**
+2. Click **+ (Add)** button
+3. Select **"M3U Tuner"** from the dropdown
+4. Configure the tuner:
+
+**Tuner Settings:**
+```
+File or URL: http://YOUR-SERVER-IP:8080/playlist.m3u
+
+Example: http://192.168.1.100:8080/playlist.m3u
+         or http://localhost:8080/playlist.m3u (if on same machine)
+
+User agent: (leave blank or use default)
+Simultaneous stream limit: 3 (adjust based on your server capacity)
+```
+
+**Advanced Options (optional):**
+- **Auto-loop live streams**: Enabled (recommended for continuous channels)
+- **Enable stream probing**: Enabled (helps with codec detection)
+
+5. Click **Save**
+
+#### Step 3: Configure EPG Source (XMLTV)
+
+1. In **Dashboard** → **Live TV** → **Guide Data Providers**
+2. Click **+ (Add)** to add a new guide provider
+3. Select **"XMLTV"** from the dropdown
+4. Configure the EPG:
+
+**XMLTV Settings:**
+```
+File or URL: http://YOUR-SERVER-IP:8080/epg.xml
+
+Example: http://192.168.1.100:8080/epg.xml
+         or http://localhost:8080/epg.xml
+
+Refresh guide every: 2 hours (recommended)
+Days of guide data: 2 (matches HLS server's 48-hour lookahead)
+```
+
+5. Click **Save**
+
+#### Step 4: Map Channels to EPG
+
+1. Go to **Dashboard** → **Live TV** → **Channels**
+2. For each channel, click the **⋮** (three dots) menu → **Edit**
+3. In the **Guide** section:
+   - Match the channel to its EPG data by name
+   - Jellyfin should auto-match if channel names match between M3U and XMLTV
+   - If not matched, manually select the correct guide entry
+4. Verify that **Enable** is checked
+5. Click **Save**
+
+#### Step 5: Refresh Guide Data
+
+1. Go to **Dashboard** → **Live TV** → **Guide Data Providers**
+2. Click the **Refresh Guide Data** button
+3. Wait for the refresh to complete (check **Dashboard** → **Scheduled Tasks**)
+
+#### Step 6: Verify Setup
+
+1. Navigate to **Live TV** in the Jellyfin main menu
+2. You should see:
+   - **Channels** tab showing your HLS channels
+   - **Guide** tab showing the program schedule with show titles and times
+   - Channel logos (if configured in the HLS server)
+
+#### Troubleshooting Jellyfin Setup
+
+**Channels not appearing:**
+- Verify the M3U URL is accessible: `curl http://YOUR-SERVER-IP:8080/playlist.m3u`
+- Check Jellyfin logs: **Dashboard** → **Logs** → **Server**
+- Ensure channels are started in the HLS admin panel
+
+**EPG data not showing:**
+- Verify the XMLTV URL is accessible: `curl http://YOUR-SERVER-IP:8080/epg.xml`
+- Check that EPG generation is enabled in HLS server: `ENABLE_EPG=true` in `.env`
+- Refresh guide data manually
+- Ensure channel names match between M3U and XMLTV
+
+**Playback issues:**
+- Check network connectivity between Jellyfin and HLS server
+- Verify FFmpeg is running for the channel (check HLS server logs)
+- Try increasing **Simultaneous stream limit** in tuner settings
+- Enable **Direct Play** in Jellyfin playback settings
+
+**Guide refresh failing:**
+- Check Jellyfin scheduled tasks for errors
+- Verify no firewall blocking EPG URL
+- Try reducing **Refresh guide every** to 4 hours if too frequent
+
+#### Advanced Configuration
+
+**Custom Channel Numbers:**
+Edit `/admin/` to assign specific channel numbers. Jellyfin will respect the `tvg-chno` attribute in the M3U playlist.
+
+**Channel Groups:**
+The HLS server automatically assigns channels to groups based on configuration. These appear as filters in Jellyfin's Live TV interface.
+
+**Recording (DVR):**
+Jellyfin can record live streams. Go to **Dashboard** → **Live TV** → **Recording** to configure:
+- Recording path
+- Post-processing options
+- Series recording rules
+
 ### Setting Up Media Libraries
 
 1. Create a library:

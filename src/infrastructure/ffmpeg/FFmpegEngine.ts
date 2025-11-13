@@ -1,7 +1,7 @@
 import ffmpeg, { FfmpegCommand } from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs/promises';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { config } from '../../config/env';
 import { createLogger } from '../../utils/logger';
 import { FFmpegError } from '../../utils/errors';
@@ -912,79 +912,121 @@ export class FFmpegEngine {
   /**
    * Find and kill orphaned FFmpeg processes writing to HLS output directories
    * Orphaned processes are those not tracked in activeStreams
-   * 
+   *
    * @param hlsOutputDir - HLS output directory to check (defaults to config.paths.hlsOutput)
    * @returns Number of processes killed
    */
   public killOrphanedProcesses(hlsOutputDir?: string): number {
     const outputDir = hlsOutputDir || config.paths.hlsOutput;
     const outputDirAbs = path.resolve(outputDir);
-    
+
     logger.info({ outputDir: outputDirAbs }, 'Searching for orphaned FFmpeg processes');
-    
+
     let killedCount = 0;
-    
+
     try {
       // Find FFmpeg processes writing to our HLS output directory
       // Note: We kill all FFmpeg processes accessing our output directory.
       // Active streams are managed via this.activeStreams and should be stopped properly,
       // but if they become orphaned (e.g., after a crash), this will clean them up.
-      // Use lsof to find processes with open files in our output directory
+
+      const pids = new Set<number>();
+
+      // Method 1: Use lsof to find processes with open files in our output directory
+      // Using spawnSync with array arguments prevents shell injection
       try {
-        const lsofOutput = execSync(
-          `lsof +D "${outputDirAbs}" 2>/dev/null | grep -i ffmpeg || true`,
-          { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
-        ).trim();
-        
-        if (!lsofOutput) {
-          logger.debug('No FFmpeg processes found accessing HLS output directory');
-          return 0;
-        }
-        
-        // Parse PIDs from lsof output (second column)
-        const pids = new Set<number>();
-        for (const line of lsofOutput.split('\n')) {
-          const match = line.trim().split(/\s+/);
-          if (match.length >= 2) {
-            const pid = parseInt(match[1], 10);
-            if (!isNaN(pid) && pid > 0) {
-              pids.add(pid);
-            }
-          }
-        }
-        
-        // Alternative: Also check ps for FFmpeg processes with our output directory in command line
-        try {
-          const psOutput = execSync(
-            `ps aux | grep -E '[f]fmpeg.*${outputDirAbs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}' || true`,
-            { encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }
-          ).trim();
-          
-          for (const line of psOutput.split('\n')) {
-            const match = line.trim().split(/\s+/);
-            if (match.length >= 2) {
-              const pid = parseInt(match[1], 10);
-              if (!isNaN(pid) && pid > 0) {
-                pids.add(pid);
+        const lsofResult = spawnSync('lsof', ['+D', outputDirAbs], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'], // Suppress stderr
+          maxBuffer: 10 * 1024 * 1024,
+        });
+
+        if (lsofResult.status === 0 && lsofResult.stdout) {
+          const lines = lsofResult.stdout.trim().split('\n');
+
+          // Parse PIDs from lsof output (second column)
+          for (const line of lines) {
+            // Check if line contains 'ffmpeg' (case-insensitive)
+            if (line.toLowerCase().includes('ffmpeg')) {
+              const match = line.trim().split(/\s+/);
+              if (match.length >= 2) {
+                const pid = parseInt(match[1], 10);
+                if (!isNaN(pid) && pid > 0) {
+                  pids.add(pid);
+                }
               }
             }
           }
-        } catch (error) {
-          logger.debug({ error }, 'Could not check ps for FFmpeg processes');
         }
-        
-        // Kill orphaned processes (not in activePids)
-        for (const pid of pids) {
-          try {
-            // Verify it's actually an FFmpeg process and accessing our files
-            const procInfo = execSync(`ps -p ${pid} -o comm= 2>/dev/null || true`, { encoding: 'utf-8' }).trim();
-            if (procInfo && procInfo.toLowerCase().includes('ffmpeg')) {
+      } catch (error) {
+        // lsof might not be available on all systems
+        logger.debug({ error }, 'lsof not available or failed');
+      }
+
+      // Method 2: Use pgrep to find FFmpeg processes (safer fallback)
+      // Note: pgrep -f searches full command line, but we can't pass complex patterns safely
+      // Instead, we'll get all ffmpeg processes and filter by command line later
+      try {
+        const pgrepResult = spawnSync('pgrep', ['ffmpeg'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+
+        if (pgrepResult.status === 0 && pgrepResult.stdout) {
+          const pgrepPids = pgrepResult.stdout
+            .trim()
+            .split('\n')
+            .map(p => parseInt(p.trim(), 10))
+            .filter(p => !isNaN(p) && p > 0);
+
+          // Verify each PID is actually accessing our output directory
+          for (const pid of pgrepPids) {
+            try {
+              // Get command line for this process
+              const cmdlineResult = spawnSync('ps', ['-p', pid.toString(), '-o', 'args='], {
+                encoding: 'utf-8',
+                stdio: ['ignore', 'pipe', 'ignore'],
+              });
+
+              if (cmdlineResult.status === 0 && cmdlineResult.stdout) {
+                const cmdline = cmdlineResult.stdout.trim();
+                // Check if command line contains our output directory
+                if (cmdline.includes(outputDirAbs)) {
+                  pids.add(pid);
+                }
+              }
+            } catch (error) {
+              logger.debug({ error, pid }, 'Could not verify process command line');
+            }
+          }
+        }
+      } catch (error) {
+        logger.debug({ error }, 'pgrep not available or failed');
+      }
+
+      if (pids.size === 0) {
+        logger.debug('No FFmpeg processes found accessing HLS output directory');
+        return 0;
+      }
+
+      // Kill orphaned processes
+      for (const pid of pids) {
+        try {
+          // Verify it's actually an FFmpeg process
+          const psResult = spawnSync('ps', ['-p', pid.toString(), '-o', 'comm='], {
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+          });
+
+          if (psResult.status === 0 && psResult.stdout) {
+            const procName = psResult.stdout.trim().toLowerCase();
+            if (procName.includes('ffmpeg')) {
               logger.warn({ pid, outputDir: outputDirAbs }, 'Killing orphaned FFmpeg process');
-              
+
               // Try graceful kill first
               try {
                 process.kill(pid, 'SIGTERM');
-                
+
                 // Wait a moment, then force kill if still running
                 setTimeout(() => {
                   try {
@@ -995,73 +1037,32 @@ export class FFmpegEngine {
                     // Process already dead, ignore
                   }
                 }, 2000);
-                
+
                 killedCount++;
-              } catch (error: any) {
-                if (error.code !== 'ESRCH') {
+              } catch (error) {
+                const err = error as NodeJS.ErrnoException;
+                if (err.code !== 'ESRCH') {
                   // ESRCH means process doesn't exist, which is fine
                   logger.warn({ error, pid }, 'Error killing orphaned FFmpeg process');
                 }
               }
             }
-          } catch (error) {
-            logger.debug({ error, pid }, 'Could not verify/kill process');
           }
-        }
-        
-      } catch (error: any) {
-        // lsof might not be available or might error
-        if (error.code !== 'ENOENT') {
-          logger.debug({ error }, 'Error searching for orphaned processes (lsof may not be available)');
-        }
-        
-        // Fallback: Use pgrep to find FFmpeg processes with our output directory
-        try {
-          const pgrepOutput = execSync(
-            `pgrep -f "ffmpeg.*${outputDirAbs}" || true`,
-            { encoding: 'utf-8' }
-          ).trim();
-          
-          if (pgrepOutput) {
-            const pids = pgrepOutput.split('\n').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p) && p > 0);
-            
-            for (const pid of pids) {
-              try {
-                logger.warn({ pid, outputDir: outputDirAbs }, 'Killing orphaned FFmpeg process (found via pgrep)');
-                process.kill(pid, 'SIGTERM');
-                
-                setTimeout(() => {
-                  try {
-                    process.kill(pid, 0);
-                    process.kill(pid, 'SIGKILL');
-                  } catch {
-                    // Process already dead
-                  }
-                }, 2000);
-                
-                killedCount++;
-              } catch (error: any) {
-                if (error.code !== 'ESRCH') {
-                  logger.warn({ error, pid }, 'Error killing orphaned process');
-                }
-              }
-            }
-          }
-        } catch (pgrepError) {
-          logger.debug({ error: pgrepError }, 'pgrep also failed');
+        } catch (error) {
+          logger.debug({ error, pid }, 'Could not verify/kill process');
         }
       }
-      
+
       if (killedCount > 0) {
         logger.info({ killedCount, outputDir: outputDirAbs }, 'Killed orphaned FFmpeg processes');
       } else {
         logger.debug({ outputDir: outputDirAbs }, 'No orphaned FFmpeg processes found');
       }
-      
+
     } catch (error) {
       logger.error({ error, outputDir: outputDirAbs }, 'Error during orphaned process cleanup');
     }
-    
+
     return killedCount;
   }
 }

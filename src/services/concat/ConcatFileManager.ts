@@ -6,25 +6,45 @@ const logger = createLogger('ConcatFileManager');
 
 /**
  * Manages FFmpeg concat files for seamless file transitions
- * 
- * Concat file format:
- * file '/path/to/file1.mp4'
- * file '/path/to/bumper.mp4'
- * file '/path/to/file2.mp4'
- * file '/path/to/bumper.mp4'
- * file '/path/to/file3.mp4'
+ *
+ * Concat file format (unquoted paths with -safe 0):
+ * file /path/to/file1.mp4
+ * file /path/to/bumper.mp4
+ * file /path/to/file2.mp4
+ * file /path/to/bumper.mp4
+ * file /path/to/file3.mp4
+ *
+ * Note: Using unquoted paths avoids single quote escaping bugs in FFmpeg concat demuxer.
+ * Paths are escaped for backslashes and single quotes using backslash escape sequences.
  */
 export class ConcatFileManager {
   /**
-   * Escape single quotes in file paths for FFmpeg concat demuxer
-   * FFmpeg requires single quotes to be doubled: ' becomes ''
-   * 
+   * Escape file paths for FFmpeg concat demuxer
+   *
+   * When using -safe 0 flag, FFmpeg concat demuxer can read unquoted paths.
+   * This avoids issues with single quote escaping (which has known bugs in FFmpeg).
+   *
+   * For unquoted paths, we need to escape special characters:
+   * - Backslashes: \ becomes \\
+   * - Spaces: (space) becomes \(space)
+   * - Single quotes: ' becomes \'
+   * - Other special chars that might appear in filenames
+   *
    * @param filePath - File path to escape
    * @returns Escaped file path
    */
   private escapePathForConcat(filePath: string): string {
-    // Escape single quotes by doubling them (FFmpeg concat demuxer requirement)
-    return filePath.replace(/'/g, "''");
+    // For unquoted paths (with -safe 0), escape special characters
+    return filePath
+      .replace(/\\/g, '\\\\')    // Escape backslashes first (must be first!)
+      .replace(/ /g, '\\ ')      // Escape spaces
+      .replace(/'/g, "\\'")      // Escape single quotes
+      .replace(/"/g, '\\"')      // Escape double quotes
+      .replace(/\(/g, '\\(')     // Escape parentheses (common in filenames)
+      .replace(/\)/g, '\\)')
+      .replace(/\[/g, '\\[')     // Escape brackets
+      .replace(/\]/g, '\\]')
+      .replace(/!/g, '\\!');     // Escape exclamation marks
   }
   /**
    * Create or update a concat file for a channel
@@ -106,13 +126,15 @@ export class ConcatFileManager {
           'Creating concat file with inpoint (format: file on one line, inpoint on separate line)'
         );
         // CRITICAL: inpoint must be on separate line per FFmpeg documentation
-        lines.push(`file '${escapedPath}'`);
+        // Using unquoted paths (with -safe 0) to avoid single quote escaping bugs
+        lines.push(`file ${escapedPath}`);
         lines.push(`inpoint ${inpointValue}`);
       } else {
         const escapedPath = this.escapePathForConcat(mediaFiles[i]);
-        lines.push(`file '${escapedPath}'`);
+        // Using unquoted paths (with -safe 0) to avoid single quote escaping bugs
+        lines.push(`file ${escapedPath}`);
       }
-      
+
       // Add bumper after each file (except the last one)
       // The bumper file will be regenerated with fresh content when each episode starts
       // Only include bumper if it exists (to prevent FFmpeg from crashing if generation fails)
@@ -120,7 +142,8 @@ export class ConcatFileManager {
         try {
           await fs.access(bumperPath);
           const escapedBumperPath = this.escapePathForConcat(bumperPath);
-          lines.push(`file '${escapedBumperPath}'`);
+          // Using unquoted paths (with -safe 0) to avoid single quote escaping bugs
+          lines.push(`file ${escapedBumperPath}`);
         } catch {
           // Bumper doesn't exist yet - skip it (will be added when generated)
           logger.warn(
