@@ -109,11 +109,11 @@ npm start
 ```
 
 The interactive setup script (`npm run setup`) will guide you through:
-- ? Media directory configuration
-- ? API key generation
-- ? Streaming quality settings
-- ? Database setup (PostgreSQL)
-- ? Automatic database migrations
+- Media directory configuration
+- API key generation
+- Streaming quality settings
+- Database setup (PostgreSQL)
+- Automatic database migrations
 
 ### Installation Methods
 
@@ -337,7 +337,7 @@ If you prefer manual configuration:
    - `npm run migrate:sh` - Force use bash script (Linux/Mac)
    - `npm run migrate:ts` - Force use TypeScript script (Windows/requires build)
    
-   **Important**: All 7 migrations will be applied automatically. The migration system tracks applied migrations and will skip already-applied ones on subsequent runs.
+   **Important**: All migrations will be applied automatically. The migration system tracks applied migrations and will skip already-applied ones on subsequent runs.
 
 5. **Start the server:**
    ```bash
@@ -369,7 +369,7 @@ The server uses a `.env` file for configuration. You can either:
 Edit `.env` file with your configuration:
 
 ```env
-# Media directories (comma-separated paths)
+# Media directories (comma-separated paths, this step is not deprecated, as library creation takes place in the admin UI )
 MEDIA_DIRECTORIES=/media/movies,/media/shows,/media/anime
 
 # API key for authentication (generate a secure random string!)
@@ -490,6 +490,7 @@ Media ? Open Network Stream ? http://localhost:8080/movies/master.m3u8
 - Kodi: Install IPTV Simple Client addon
 - TiviMate (Android): Add playlist URL
 - Web Browser: Use hls.js or Video.js
+- Many More
 
 Web Browser Example:
 ```html
@@ -584,7 +585,7 @@ curl -X POST http://localhost:8080/api/schedules/channels/{channelId}/blocks \
 **Playback Modes:**
 - **Sequential (Progressive)**: Plays media in order, with progression tracking. **Note**: Only works with buckets containing a single series. Progression continues across days (Day 1: s1e1, s1e2, s1e3... Day 2: s1e4, s1e5, s1e6...) and persists across EPG regenerations.
 - **Shuffle**: Randomizes order once, then plays sequentially
-- **Random**: Shuffles order each time
+- **Random**: Shuffles order each time, untested, and may introduce issues with EPG, which a lot of infrastructure relies on. TODO
 
 Then enable dynamic playlists on the channel:
 ```bash
@@ -747,7 +748,7 @@ See the [Migration Guide](#migration-guide) section below.
 
 ### EPG Not Generating?
 
-1. **Check EPG is enabled:**
+1. **Check EPG is enabled (NEVER disable this):**
    ```env
    ENABLE_EPG=true
    ```
@@ -763,7 +764,7 @@ See the [Migration Guide](#migration-guide) section below.
 
 ### Understanding Migrations
 
-The system uses 7 database migrations that are applied automatically:
+The system uses database migrations that are applied automatically:
 1. Initial schema (channels, media_files, libraries, buckets)
 2. Schedule blocks support
 3. EPG cache tables
@@ -771,6 +772,7 @@ The system uses 7 database migrations that are applied automatically:
 5. Schedule time tracking
 6. Additional indexes for performance
 7. Schema updates and optimizations
+8. ...
 
 ### Checking Migration Status
 
