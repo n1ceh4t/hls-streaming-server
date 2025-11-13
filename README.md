@@ -48,6 +48,7 @@ An HLS/IPTV streaming server for creating multi-channel streaming services from 
 - Global buckets (shared across channels)
 - Channel-specific buckets
 - Media filtering and organization
+- Series hierarchy extraction
 
 **Schedule Blocks**: Time-based programming rules that:
 - Define when specific content plays (time ranges, days of week)
