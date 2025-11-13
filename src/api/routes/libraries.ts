@@ -284,6 +284,25 @@ export const createLibraryRoutes = (libraryService: LibraryService, authService?
   });
 
   /**
+   * GET /api/media/count
+   * Get total count of all media files
+   */
+  router.get('/api/media/count', async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const totalCount = await libraryService.getTotalMediaCount();
+
+      return res.json({
+        success: true,
+        data: {
+          totalCount,
+        },
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  /**
    * GET /api/media/series
    * Get all series names
    */

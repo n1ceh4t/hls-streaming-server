@@ -1895,12 +1895,30 @@
                                     <div id="bucketCreateSuccess" style="display: none; margin-top: 8px; padding: 8px; background: var(--bg-tertiary); border-radius: var(--radius); border: 1px solid var(--accent); color: var(--accent); font-size: 13px;"></div>
                                 </div>
                                 <div class="form-group" style="margin-bottom: 15px;">
-                                    <label>Playback Mode:</label>
+                                    <label style="display: flex; align-items: center; gap: 8px;">
+                                        Playback Mode:
+                                        <span style="position: relative; display: inline-block;" 
+                                              onmouseenter="this.querySelector('.tooltip').style.visibility = 'visible';" 
+                                              onmouseleave="this.querySelector('.tooltip').style.visibility = 'hidden';">
+                                            <span style="cursor: help; color: var(--text-muted); font-size: 14px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--text-muted); display: inline-flex; align-items: center; justify-content: center; line-height: 1;">?</span>
+                                            <span class="tooltip" style="visibility: hidden; width: 320px; max-width: 90vw; background-color: var(--bg-secondary); color: var(--text-primary); text-align: left; border-radius: var(--radius); padding: 12px; position: absolute; z-index: 1000; bottom: 125%; left: 50%; transform: translateX(-50%); border: 1px solid var(--border); box-shadow: 0 4px 8px rgba(0,0,0,0.2); font-size: 12px; line-height: 1.5; white-space: normal; word-wrap: break-word;">
+                                                <strong>Sequential Mode (Progressive):</strong><br>
+                                                • Only works with buckets containing a <strong>single series</strong><br>
+                                                • Progression continues across days (Day 1: s1e1, s1e2, s1e3... Day 2: s1e4, s1e5, s1e6...)<br>
+                                                • Progression persists across EPG regenerations<br>
+                                                • If bucket has multiple series, progression is disabled and playback starts from beginning each time
+                                                <span style="position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border-width: 5px; border-style: solid; border-color: var(--bg-secondary) transparent transparent transparent;"></span>
+                                            </span>
+                                        </span>
+                                    </label>
                                     <select id="blockPlaybackMode" style="width: 100%; padding: 8px;">
-                                        <option value="sequential">Sequential</option>
+                                        <option value="sequential">Sequential (Progressive)</option>
                                         <option value="shuffle">Shuffle</option>
                                         <option value="random">Random</option>
                                     </select>
+                                    <small style="color: var(--text-muted); display: block; margin-top: 4px;">
+                                        <strong>Note:</strong> Sequential mode with progression only works when the selected bucket contains media from a single series. Multiple series will disable progression.
+                                    </small>
                                 </div>
                                 <div class="form-group" style="margin-bottom: 15px;">
                                     <label>Priority:</label>
@@ -2255,7 +2273,7 @@
             }
             
             if (slug) {
-                const streamUrl = `${API_BASE.replace('/api', '')}/stream/${slug}/playlist.m3u8`;
+                const streamUrl = `${API_BASE.replace('/api', '')}/${slug}/master.m3u8`;
                 if (typeof Hls !== 'undefined' && Hls.isSupported()) {
                     hlsPlayer = new Hls();
                     hlsPlayer.loadSource(streamUrl);
@@ -2279,13 +2297,13 @@
 
         async function loadDashboard() {
             try {
-                const [channelsRes, mediaRes] = await Promise.all([
+                const [channelsRes, mediaCountRes] = await Promise.all([
                     fetch(`${API_BASE}/api/channels`),
-                    fetch(`${API_BASE}/api/media?limit=1`),
+                    fetch(`${API_BASE}/api/media/count`),
                 ]);
 
                 const channelsData = await channelsRes.json();
-                const mediaData = await mediaRes.json();
+                const mediaCountData = await mediaCountRes.json();
 
                 const channels = channelsData.data || [];
                 const activeChannels = channels.filter(c => c.state === 'streaming');
@@ -2298,7 +2316,7 @@
 
                 if (statChannels) statChannels.textContent = channels.length;
                 if (statActive) statActive.textContent = activeChannels.length;
-                if (statMedia) statMedia.textContent = mediaData.data?.count || 0;
+                if (statMedia) statMedia.textContent = mediaCountData.data?.totalCount || 0;
                 if (statViewers) statViewers.textContent = totalViewers;
             } catch (error) {
                 console.error('Failed to load dashboard:', error);
@@ -3489,6 +3507,33 @@
                             </div>
                             <button class="btn btn-small btn-success" onclick="updateChannelSettings('${channelId}')">Save Settings</button>
                         </div>
+                        
+                        <h4 style="color: var(--text-primary); margin-bottom: 10px; margin-top: 30px;">Schedule Time</h4>
+                        <div style="background: var(--bg-tertiary); padding: 15px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px; color: var(--text-primary);">Schedule Start Time:</label>
+                                <input type="datetime-local" id="manageChannelScheduleStartTime" 
+                                       value="${channel.scheduleStartTime ? new Date(channel.scheduleStartTime).toISOString().slice(0, 16) : ''}" 
+                                       style="width: 100%; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius);">
+                                <small style="color: var(--text-muted); display: block; margin-top: 4px;">Adjust the schedule timeline start time. This affects EPG positioning.</small>
+                            </div>
+                            <button class="btn btn-small btn-success" onclick="updateScheduleStartTime('${channelId}')">Update Schedule Time</button>
+                        </div>
+                        
+                        <h4 style="color: var(--text-primary); margin-bottom: 10px; margin-top: 30px;">Stream Link</h4>
+                        <div style="background: var(--bg-tertiary); padding: 15px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px; color: var(--text-primary);">Direct Stream URL:</label>
+                                <div style="display: flex; gap: 8px;">
+                                    <input type="text" id="manageChannelStreamUrl" 
+                                           value="${window.location.protocol}//${window.location.host}/${channel.config.slug}/master.m3u8" 
+                                           readonly
+                                           style="flex: 1; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius); font-family: monospace; font-size: 12px;">
+                                    <button class="btn btn-small" onclick="copyStreamUrl(event, '${channelId}')" title="Copy to clipboard">Copy</button>
+                                </div>
+                                <small style="color: var(--text-muted); display: block; margin-top: 4px;">Direct link to the HLS stream playlist</small>
+                            </div>
+                        </div>
                 `;
                 
                 // Only show bucket assignment section if dynamic playlist is NOT enabled
@@ -3776,6 +3821,72 @@
             } catch (error) {
                 alert('Network error. Please try again.');
                 console.error('Failed to update channel settings:', error);
+            }
+        }
+
+        async function updateScheduleStartTime(channelId) {
+            try {
+                const scheduleStartTimeInput = document.getElementById('manageChannelScheduleStartTime');
+                const scheduleStartTimeValue = scheduleStartTimeInput.value;
+                
+                if (!scheduleStartTimeValue) {
+                    alert('Please enter a schedule start time');
+                    return;
+                }
+                
+                // Convert datetime-local to ISO string
+                const scheduleStartTime = new Date(scheduleStartTimeValue).toISOString();
+                
+                const res = await fetch(`${API_BASE}/api/channels/${channelId}/schedule-time`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        scheduleStartTime: scheduleStartTime,
+                    }),
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Schedule start time updated successfully!');
+                    // Refresh the modal
+                    const modal = document.querySelector('.admin-modal');
+                    if (modal) {
+                        const channelName = modal.querySelector('h3').textContent.replace('Manage Channel: ', '');
+                        manageChannel(channelId, channelName);
+                    }
+                } else {
+                    alert(data.error?.message || 'Failed to update schedule start time');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to update schedule start time:', error);
+            }
+        }
+
+        async function copyStreamUrl(event, channelId) {
+            try {
+                const streamUrlInput = document.getElementById('manageChannelStreamUrl');
+                const streamUrl = streamUrlInput.value;
+                
+                await navigator.clipboard.writeText(streamUrl);
+                
+                // Show feedback
+                const copyButton = event.target;
+                const originalText = copyButton.textContent;
+                copyButton.textContent = 'Copied!';
+                copyButton.style.background = 'var(--success)';
+                
+                setTimeout(() => {
+                    copyButton.textContent = originalText;
+                    copyButton.style.background = '';
+                }, 2000);
+            } catch (error) {
+                // Fallback for older browsers
+                const streamUrlInput = document.getElementById('manageChannelStreamUrl');
+                streamUrlInput.select();
+                document.execCommand('copy');
+                alert('Stream URL copied to clipboard!');
             }
         }
 
@@ -4702,8 +4813,8 @@
                                 </div>
                             </div>
                             <div style="display: flex; gap: 5px; align-items: start;">
-                                <button class="btn btn-small" onclick="moveBlockUp('${block.id}')" ${index === 0 ? 'disabled' : ''} title="Move Up">?</button>
-                                <button class="btn btn-small" onclick="moveBlockDown('${block.id}')" ${index === sorted.length - 1 ? 'disabled' : ''} title="Move Down">?</button>
+                                <button class="btn btn-small" onclick="moveBlockUp('${block.id}')" ${index === 0 ? 'disabled' : ''} title="Move Up">↑</button>
+                                <button class="btn btn-small" onclick="moveBlockDown('${block.id}')" ${index === sorted.length - 1 ? 'disabled' : ''} title="Move Down">↓</button>
                                 ${block.bucketId ? `<button class="btn btn-small" onclick="resetBlockProgression('${block.id}', '${block.bucketId}', '${escapeHtml(block.name)}', '${escapeHtml(block.bucket?.name || 'Unknown')}')" title="Reset Progression">Reset</button>` : ''}
                                 <button class="btn btn-small" onclick="editBlock('${block.id}')" title="Edit">Edit</button>
                                 <button class="btn btn-small btn-danger" onclick="deleteBlock('${block.id}')" title="Delete">Delete</button>
@@ -4718,15 +4829,17 @@
         }
 
         function updateManageBucketButton() {
-            const select = document.getElementById('blockBucketId');
-            const btn = document.getElementById('manageBucketBtn');
+            // Check both modal and inline forms
+            const select = document.getElementById('blockBucketIdModal') || document.getElementById('blockBucketId');
+            const btn = document.getElementById('manageBucketBtnModal') || document.getElementById('manageBucketBtn');
             if (select && btn) {
                 btn.style.display = select.value ? 'inline-block' : 'none';
             }
         }
 
         async function manageSelectedBucketFromForm() {
-            const select = document.getElementById('blockBucketId');
+            // Check both modal and inline forms
+            const select = document.getElementById('blockBucketIdModal') || document.getElementById('blockBucketId');
             if (!select || !select.value) {
                 alert('Please select a bucket first');
                 return;
@@ -4739,8 +4852,9 @@
             await manageBucket(select.value, bucketName);
         }
 
-        async function loadBucketsForBlockForm() {
-            const select = document.getElementById('blockBucketId');
+        async function loadBucketsForBlockForm(inModal = false) {
+            // Try modal ID first, then fallback to inline
+            const select = document.getElementById(inModal ? 'blockBucketIdModal' : 'blockBucketId') || document.getElementById('blockBucketId');
             if (!select) {
                 console.warn('blockBucketId select element not found');
                 return;
@@ -4886,8 +5000,9 @@
             });
         }
 
-        function showAddBlockForm(blockId = null) {
-            const form = document.getElementById('addBlockForm');
+        function showAddBlockForm(blockId = null, inModal = false) {
+            const formId = inModal ? 'addBlockFormModal' : 'addBlockForm';
+            const form = document.getElementById(formId);
             if (!form) {
                 console.error('addBlockForm element not found. Please ensure you are on the playlists tab.');
                 alert('Please navigate to the Playlists tab to edit schedule blocks.');
@@ -4902,6 +5017,11 @@
                 return;
             }
             
+            // Helper to get element by ID (with Modal suffix if in modal)
+            const getEl = (id) => {
+                return document.getElementById(inModal ? id + 'Modal' : id);
+            };
+            
             if (blockId) {
                 // Edit mode
                 const block = playlistBlocks.find(b => b.id === blockId);
@@ -4909,13 +5029,13 @@
                     formTitle.textContent = 'Edit Schedule Block';
                     submitBtn.textContent = 'Update Block';
                     
-                    const blockIdEl = document.getElementById('blockId');
-                    const blockNameEl = document.getElementById('blockName');
-                    const blockStartTimeEl = document.getElementById('blockStartTime');
-                    const blockEndTimeEl = document.getElementById('blockEndTime');
-                    const blockPlaybackModeEl = document.getElementById('blockPlaybackMode');
-                    const blockPriorityEl = document.getElementById('blockPriority');
-                    const blockEnabledEl = document.getElementById('blockEnabled');
+                    const blockIdEl = getEl('blockId');
+                    const blockNameEl = getEl('blockName');
+                    const blockStartTimeEl = getEl('blockStartTime');
+                    const blockEndTimeEl = getEl('blockEndTime');
+                    const blockPlaybackModeEl = getEl('blockPlaybackMode');
+                    const blockPriorityEl = getEl('blockPriority');
+                    const blockEnabledEl = getEl('blockEnabled');
                     
                     if (blockIdEl) blockIdEl.value = block.id;
                     if (blockNameEl) blockNameEl.value = block.name;
@@ -4926,21 +5046,30 @@
                     if (blockPriorityEl) blockPriorityEl.value = block.priority || 1;
                     if (blockEnabledEl) blockEnabledEl.checked = block.enabled !== false;
                     
-                    // Set day checkboxes
-                    document.querySelectorAll('input[name="dayOfWeek"]').forEach(cb => cb.checked = false);
+                    // Set day checkboxes (within the form)
+                    const dayCheckboxes = form.querySelectorAll('input[name="dayOfWeek"]');
+                    dayCheckboxes.forEach(cb => cb.checked = false);
                     if (block.dayOfWeek && block.dayOfWeek.length > 0) {
                         block.dayOfWeek.forEach(day => {
-                            const cb = document.querySelector(`input[name="dayOfWeek"][value="${day}"]`);
+                            const cb = form.querySelector(`input[name="dayOfWeek"][value="${day}"]`);
                             if (cb) cb.checked = true;
                         });
                     }
                     
                     // Set bucket
                     setTimeout(() => {
-                        const blockBucketIdEl = document.getElementById('blockBucketId');
+                        const blockBucketIdEl = getEl('blockBucketId');
                         if (blockBucketIdEl) {
                             blockBucketIdEl.value = block.bucketId || '';
-                            updateManageBucketButton();
+                            if (inModal) {
+                                // Update manage button in modal if it exists
+                                const manageBtn = form.querySelector('#manageBucketBtn');
+                                if (manageBtn) {
+                                    manageBtn.style.display = blockBucketIdEl.value ? 'block' : 'none';
+                                }
+                            } else {
+                                updateManageBucketButton();
+                            }
                         }
                     }, 100);
                 }
@@ -4949,20 +5078,24 @@
                 formTitle.textContent = 'Add Schedule Block';
                 submitBtn.textContent = 'Save Block';
                 
-                const newBlockForm = document.getElementById('newBlockForm');
-                const blockIdEl = document.getElementById('blockId');
-                const blockPriorityEl = document.getElementById('blockPriority');
-                const blockEnabledEl = document.getElementById('blockEnabled');
+                const newBlockForm = form.querySelector('form');
+                const blockIdEl = getEl('blockId');
+                const blockPriorityEl = getEl('blockPriority');
+                const blockEnabledEl = getEl('blockEnabled');
                 
                 if (newBlockForm) newBlockForm.reset();
                 if (blockIdEl) blockIdEl.value = '';
                 if (blockPriorityEl) blockPriorityEl.value = '1';
                 if (blockEnabledEl) blockEnabledEl.checked = true;
-                updateManageBucketButton();
+                if (!inModal) {
+                    updateManageBucketButton();
+                }
             }
             
-            form.style.display = 'block';
-            loadBucketsForBlockForm();
+            if (!inModal) {
+                form.style.display = 'block';
+            }
+            loadBucketsForBlockForm(inModal);
         }
 
         function hideAddBlockForm() {
@@ -4981,7 +5114,91 @@
         }
 
         function editBlock(blockId) {
-            showAddBlockForm(blockId);
+            // Open form in modal instead of inline
+            const form = document.getElementById('addBlockForm');
+            if (!form) {
+                console.error('addBlockForm element not found. Please ensure you are on the playlists tab.');
+                alert('Please navigate to the Playlists tab to edit schedule blocks.');
+                return;
+            }
+            
+            // Create modal wrapper
+            const modal = document.createElement('div');
+            modal.className = 'admin-modal';
+            modal.style.display = 'flex';
+            modal.onclick = function(e) {
+                if (e.target === modal) {
+                    closeBlockModal();
+                }
+            };
+            
+            // Create modal content
+            const modalContent = document.createElement('div');
+            modalContent.className = 'admin-modal-content';
+            modalContent.onclick = function(e) {
+                e.stopPropagation();
+            };
+            
+            // Clone the form and move it to modal
+            const formClone = form.cloneNode(true);
+            formClone.id = 'addBlockFormModal';
+            formClone.style.display = 'block';
+            formClone.style.background = 'transparent';
+            formClone.style.padding = '0';
+            formClone.style.border = 'none';
+            formClone.style.margin = '0';
+            
+            // Update all input IDs to be unique (add Modal suffix)
+            const inputs = formClone.querySelectorAll('input, select, button[type="submit"]');
+            inputs.forEach(input => {
+                if (input.id) {
+                    input.id = input.id + 'Modal';
+                }
+            });
+            // Update form ID
+            const formElement = formClone.querySelector('form');
+            if (formElement) {
+                formElement.id = 'newBlockFormModal';
+            }
+            
+            // Add close button
+            const closeBtn = document.createElement('button');
+            closeBtn.textContent = '×';
+            closeBtn.style.cssText = 'position: absolute; top: 10px; right: 10px; background: none; border: none; color: var(--text-primary); font-size: 28px; cursor: pointer; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius);';
+            closeBtn.onclick = closeBlockModal;
+            closeBtn.onmouseover = function() { this.style.background = 'var(--bg-hover)'; };
+            closeBtn.onmouseout = function() { this.style.background = 'none'; };
+            
+            modalContent.style.position = 'relative';
+            modalContent.style.maxHeight = '90vh';
+            modalContent.style.overflowY = 'auto';
+            modalContent.appendChild(closeBtn);
+            modalContent.appendChild(formClone);
+            modal.appendChild(modalContent);
+            document.body.appendChild(modal);
+            
+            // Store modal reference for cleanup
+            window.currentBlockModal = modal;
+            
+            // Now populate the form (after DOM is ready)
+            setTimeout(() => {
+                showAddBlockForm(blockId, true);
+            }, 0);
+            
+            // Scroll to top of modal
+            modal.scrollTop = 0;
+        }
+        
+        function closeBlockModal() {
+            if (window.currentBlockModal) {
+                window.currentBlockModal.remove();
+                window.currentBlockModal = null;
+            }
+            // Reset the original form
+            const form = document.getElementById('addBlockForm');
+            if (form) {
+                form.style.display = 'none';
+            }
         }
 
         async function saveBlock(event) {
@@ -4992,20 +5209,30 @@
                 return;
             }
 
-            const blockId = document.getElementById('blockId').value;
-            const selectedDays = Array.from(document.querySelectorAll('input[name="dayOfWeek"]:checked'))
+            // Check if we're in a modal or inline form
+            const isModal = !!window.currentBlockModal;
+            const formPrefix = isModal ? 'addBlockFormModal' : 'addBlockForm';
+            
+            // Get form elements - check modal first, then fallback to inline
+            const getElement = (id) => {
+                const modalId = id + 'Modal';
+                return document.getElementById(modalId) || document.getElementById(id);
+            };
+
+            const blockId = getElement('blockId')?.value || '';
+            const selectedDays = Array.from(document.querySelectorAll(`#addBlockFormModal input[name="dayOfWeek"]:checked, #addBlockForm input[name="dayOfWeek"]:checked`))
                 .map(cb => parseInt(cb.value))
                 .filter(v => !isNaN(v));
             
             const data = {
-                name: document.getElementById('blockName').value,
+                name: getElement('blockName')?.value || '',
                 dayOfWeek: selectedDays.length > 0 ? selectedDays : null,
-                startTime: document.getElementById('blockStartTime').value + ':00',
-                endTime: document.getElementById('blockEndTime').value + ':00',
-                bucketId: document.getElementById('blockBucketId').value || null,
-                playbackMode: document.getElementById('blockPlaybackMode').value,
-                priority: parseInt(document.getElementById('blockPriority').value) || 1,
-                enabled: document.getElementById('blockEnabled').checked,
+                startTime: (getElement('blockStartTime')?.value || '') + ':00',
+                endTime: (getElement('blockEndTime')?.value || '') + ':00',
+                bucketId: getElement('blockBucketId')?.value || null,
+                playbackMode: getElement('blockPlaybackMode')?.value || 'sequential',
+                priority: parseInt(getElement('blockPriority')?.value || '1') || 1,
+                enabled: getElement('blockEnabled')?.checked !== false,
             };
 
             try {
@@ -5026,6 +5253,7 @@
                 
                 if (res.ok && result.success) {
                     alert(blockId ? 'Block updated successfully!' : 'Block created successfully!');
+                    closeBlockModal();
                     hideAddBlockForm();
                     loadPlaylistBlocks();
                 } else {

@@ -106,7 +106,7 @@ export class ScheduleRepository {
       );
       
       if (isActive) {
-        logger.info(
+        logger.debug(
           {
             channelId,
             blockId: block.id,

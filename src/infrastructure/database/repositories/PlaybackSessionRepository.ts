@@ -18,14 +18,14 @@ export interface PlaybackSessionRow {
 export interface CreateSessionData {
   channelId: string;
   sessionStart: Date;
-  virtualTimeAtStart: number;
+  virtualTimeAtStart?: number; // Optional - for backward compatibility during migration
   sessionType: SessionType;
   triggeredBy?: string;
 }
 
 export interface EndSessionData {
   sessionEnd: Date;
-  virtualTimeAtEnd: number;
+  virtualTimeAtEnd?: number; // Optional - for backward compatibility during migration
 }
 
 /**
@@ -48,7 +48,7 @@ export class PlaybackSessionRepository {
       [
         data.channelId,
         data.sessionStart,
-        data.virtualTimeAtStart,
+        data.virtualTimeAtStart || 0, // Default to 0 if not provided
         data.sessionType,
         data.triggeredBy || null,
       ]
@@ -67,7 +67,7 @@ export class PlaybackSessionRepository {
            virtual_time_at_end = $2,
            duration_seconds = EXTRACT(EPOCH FROM ($1 - session_start))::INTEGER
        WHERE id = $3`,
-      [data.sessionEnd, data.virtualTimeAtEnd, sessionId]
+      [data.sessionEnd, data.virtualTimeAtEnd || 0, sessionId] // Default to 0 if not provided
     );
   }
 

@@ -4,6 +4,7 @@ import { AuthService } from '../../services/auth/AuthService';
 import { LibraryService } from '../../services/library/LibraryService';
 import { MediaBucketService } from '../../services/bucket/MediaBucketService';
 import { VirtualTimeService } from '../../services/virtual-time/VirtualTimeService';
+import { ScheduleTimeService } from '../../services/schedule-time/ScheduleTimeService';
 import { authenticate } from '../middleware/auth';
 import { config } from '../../config/env';
 import { z } from 'zod';
@@ -34,9 +35,14 @@ const updateChannelSchema = z.object({
   autoStart: z.boolean().optional(),
 });
 
+const updateScheduleTimeSchema = z.object({
+  scheduleStartTime: z.string().datetime(),
+});
+
 export const createChannelRoutes = (channelService: ChannelService, authService?: AuthService, _libraryService?: LibraryService, bucketService?: MediaBucketService) => {
   const requireAuth = authenticate(authService);
   const virtualTimeService = new VirtualTimeService();
+  const scheduleTimeService = new ScheduleTimeService();
 
   // Helper function to format duration in seconds to human-readable format
   function formatDuration(seconds: number): string {
@@ -109,6 +115,9 @@ export const createChannelRoutes = (channelService: ChannelService, authService?
         };
       }
 
+      // Get schedule start time
+      const scheduleStartTime = await scheduleTimeService.getScheduleStartTime(req.params.channelId);
+
       res.json({
         success: true,
         data: {
@@ -116,6 +125,7 @@ export const createChannelRoutes = (channelService: ChannelService, authService?
           mediaCount: media.length,
           currentMedia: media[channel.getMetadata().currentIndex] || null,
           virtualTime: virtualTimeData,
+          scheduleStartTime: scheduleStartTime?.toISOString() || null,
         },
       });
     } catch (error) {
@@ -271,6 +281,44 @@ export const createChannelRoutes = (channelService: ChannelService, authService?
         message: 'Index updated',
       });
     } catch (error) {
+      return next(error);
+    }
+  });
+
+  /**
+   * PUT /api/channels/:channelId/schedule-time
+   * Update schedule start time
+   */
+  router.put('/:channelId/schedule-time', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { channelId } = req.params;
+      const validated = updateScheduleTimeSchema.parse(req.body);
+      
+      const scheduleStartTime = new Date(validated.scheduleStartTime);
+      await scheduleTimeService.updateScheduleStartTime(channelId, scheduleStartTime);
+
+      res.json({
+        success: true,
+        message: 'Schedule start time updated',
+        data: {
+          scheduleStartTime: scheduleStartTime.toISOString(),
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Validation failed',
+            details: error.errors.map((e) => ({
+              path: e.path,
+              message: e.message,
+              code: e.code,
+            })),
+          },
+        });
+      }
       return next(error);
     }
   });

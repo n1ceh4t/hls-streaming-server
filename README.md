@@ -7,11 +7,66 @@ An HLS/IPTV streaming server for creating multi-channel streaming services from 
 - Multi-channel HLS streaming
 - Dynamic playlists with schedule-based content switching
 - Media buckets for organizing content into collections
+- Schedule blocks for time-based programming (e.g., morning cartoons, prime time movies)
+- Progressive playback mode for sequential series progression across days
 - IPTV support with M3U playlists and XMLTV EPG generation
-- Virtual time tracking for continuous playback
+- Schedule time tracking for continuous playback positioning
 - Automatic media library scanning and organization
 - API key and session-based authentication
+- Admin web interface for channel and media management
 - Docker deployment support
+
+## Architecture Overview
+
+### Core Components
+
+**Channels**: The main streaming entities. Each channel has:
+- A unique slug (URL identifier)
+- Streaming configuration (resolution, bitrate, FPS)
+- Media assigned via buckets or direct assignment
+- Schedule blocks for time-based programming
+- EPG (Electronic Program Guide) generation
+
+**Media Buckets**: Collections of media files that can be assigned to channels. Buckets support:
+- Global buckets (shared across channels)
+- Channel-specific buckets
+- Media filtering and organization
+
+**Schedule Blocks**: Time-based programming rules that:
+- Define when specific content plays (time ranges, days of week)
+- Link buckets to time slots
+- Support multiple playback modes (sequential, shuffle, random)
+- Enable progressive playback for series (single-series buckets only)
+
+**Progressive Playback**: Tracks playback position within sequential series:
+- Works only with buckets containing a single series
+- Continues across days (Day 1: s1e1, s1e2... Day 2: s1e4, s1e5...)
+- Persists across EPG regenerations
+- Automatically disabled for multi-series buckets
+
+**EPG (Electronic Program Guide)**: Generates XMLTV-compatible program listings:
+- Projects virtual timeline onto real-world time
+- Uses `schedule_start_time` as the reference point
+- Updates dynamically based on current playback position
+- Supports 48-hour lookahead by default
+
+**Database Schema**: PostgreSQL stores:
+- Channel configurations and state
+- Media file metadata and library information
+- Bucket definitions and media assignments
+- Schedule block configurations
+- EPG cache and progression tracking
+- User sessions and authentication
+
+### Data Flow
+
+1. **Media Scanning**: Media files are scanned and metadata extracted
+2. **Bucket Assignment**: Media is organized into buckets
+3. **Channel Configuration**: Channels are created and buckets assigned
+4. **Schedule Setup**: Schedule blocks define time-based programming
+5. **Stream Generation**: FFmpeg creates HLS segments from media files
+6. **EPG Generation**: EPG is generated based on schedule and current position
+7. **Playback**: Clients request HLS playlists and segments
 
 ## Installation
 
@@ -19,7 +74,18 @@ An HLS/IPTV streaming server for creating multi-channel streaming services from 
 
 - **Node.js 18+** and **npm 9+**
 - **FFmpeg** installed and in PATH
-- **PostgreSQL** (optional, for persistent state and advanced features)
+- **PostgreSQL** (required - all features including channels, media management, scheduling, and EPG depend on it)
+
+### Quick Start Checklist
+
+Before starting, ensure you have:
+
+- [ ] **Node.js 18+** and **npm 9+** installed (`node --version`, `npm --version`)
+- [ ] **FFmpeg** installed and in PATH (`ffmpeg -version`)
+- [ ] **PostgreSQL** installed and running (`psql --version`)
+- [ ] Database created (default: `hls_streaming`) or will be created during setup
+- [ ] Media directories exist and are readable
+- [ ] Port 8080 (or your chosen port) is available
 
 ### Quick Start
 
@@ -64,21 +130,60 @@ The interactive setup script (`npm run setup`) will guide you through:
    cp .env.example .env
    ```
 
-3. Edit `docker-compose.yml` to mount your media directories:
+3. **Update `docker-compose.yml`** to include PostgreSQL and mount your media directories:
    
-   Open `docker-compose.yml` and update the volumes section:
+   Open `docker-compose.yml` and add a PostgreSQL service, then update volumes:
    ```yaml
+   version: '3.8'
+   
+   services:
+     postgres:
+       image: postgres:15-alpine
+       container_name: hls-postgres
+       environment:
+         POSTGRES_DB: hls_streaming
+         POSTGRES_USER: postgres
+         POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+       volumes:
+         - postgres_data:/var/lib/postgresql/data
+       ports:
+         - "5432:5432"
+       healthcheck:
+         test: ["CMD-SHELL", "pg_isready -U postgres"]
+         interval: 10s
+         timeout: 5s
+         retries: 5
+   
+     hls-server:
+       build: .
+       container_name: hls-iptv-server
+       depends_on:
+         postgres:
+           condition: service_healthy
+       ports:
+         - "8080:8080"
+         - "8081:8081"
+       volumes:
+         # Mount your media directories here
+         # Replace /path/to/your/media with your actual media paths
+         - /media/movies:/media/movies:ro
+         - /media/shows:/media/shows:ro
+         # - /home/user/Videos:/media/videos:ro
+         
+         # HLS output (persisted)
+         - ./hls_output:/app/hls_output
+         # Temp directory
+         - ./temp:/app/temp
+       environment:
+         # ... (see existing docker-compose.yml for full config)
+         DB_HOST: postgres
+         DB_PORT: 5432
+         DB_NAME: hls_streaming
+         DB_USER: postgres
+         DB_PASSWORD: ${DB_PASSWORD:-postgres}
+   
    volumes:
-     # Mount your media directories here
-     # Replace /path/to/your/media with your actual media paths
-     - /media/movies:/media/movies:ro
-     - /media/shows:/media/shows:ro
-     - /home/user/Videos:/media/videos:ro
-     
-     # HLS output (persisted)
-     - ./hls_output:/app/hls_output
-     # Temp directory
-     - ./temp:/app/temp
+     postgres_data:
    ```
    
    **Important Notes:**
@@ -98,18 +203,41 @@ The interactive setup script (`npm run setup`) will guide you through:
    
    # Optional: Server port
    PORT=8080
+   
+   # Database configuration (for Docker, use service name as host)
+   DB_HOST=postgres
+   DB_PORT=5432
+   DB_NAME=hls_streaming
+   DB_USER=postgres
+   DB_PASSWORD=postgres
+   DB_POOL_MIN=2
+   DB_POOL_MAX=10
+   DB_SSL=false
    ```
    
    **Note:** The paths in `MEDIA_DIRECTORIES` should be the container paths (inside `/media`), not the host paths.
 
-5. Start with Docker Compose:
+5. **Run database migrations:**
+   ```bash
+   # After containers are running
+   docker-compose exec hls-server npm run migrate
+   ```
+
+6. Start with Docker Compose:
    ```bash
    docker-compose up -d
    ```
 
-6. View logs:
+7. View logs:
    ```bash
+   # All services
    docker-compose logs -f
+   
+   # Just the HLS server
+   docker-compose logs -f hls-server
+   
+   # Just PostgreSQL
+   docker-compose logs -f postgres
    ```
 
 **Example: Mounting Multiple Media Directories**
@@ -160,7 +288,7 @@ The easiest way to get started is using the interactive setup script:
    - Configuring media directories
    - Setting up API keys
    - Configuring streaming quality
-   - Setting up PostgreSQL database (optional)
+   - Setting up PostgreSQL database (required)
    - Running database migrations
 
 4. **Build and start:**
@@ -196,13 +324,20 @@ If you prefer manual configuration:
    npm run build
    ```
 
-4. **Run database migrations (optional):**
+4. **Run database migrations (required):**
    ```bash
    npm run migrate
    ```
    
-   **Note**: `npm run migrate` uses `migrate.sh` which works without building the application first. 
-   For an alternative that uses the TypeScript Database class, use `npm run migrate:ts` (requires build first).
+   **Note**: `npm run migrate` is cross-platform:
+   - **Linux/Mac**: Uses `migrate.sh` (bash script with psql) - works without building first
+   - **Windows**: Uses `migrate.ts` (TypeScript/Node.js) - requires dependencies installed
+   
+   You can also use the platform-specific commands directly:
+   - `npm run migrate:sh` - Force use bash script (Linux/Mac)
+   - `npm run migrate:ts` - Force use TypeScript script (Windows/requires build)
+   
+   **Important**: All 7 migrations will be applied automatically. The migration system tracks applied migrations and will skip already-applied ones on subsequent runs.
 
 5. **Start the server:**
    ```bash
@@ -280,10 +415,11 @@ See `.env.example` for all available configuration options.
 
 Once running, access your server at:
 
+- Admin Panel: http://localhost:8080/admin
 - API: http://localhost:8080/api/channels
 - Stream: http://localhost:8080/{channel-slug}/master.m3u8
 - EPG: http://localhost:8080/epg.xml
-- IPTV M3U: http://localhost:8080/iptv.m3u
+- IPTV M3U: http://localhost:8080/playlist.m3u
 
 ### Creating a Channel
 
@@ -397,19 +533,25 @@ curl -X POST http://localhost:8080/api/channels/{channelId}/buckets \
 Create time-based programming:
 
 ```bash
-curl -X POST http://localhost:8080/api/schedules \
+curl -X POST http://localhost:8080/api/schedules/channels/{channelId}/blocks \
   -H "X-API-Key: your-api-key" \
   -H "Content-Type: application/json" \
   -d '{
-    "channelId": "channel-id",
     "name": "Morning Cartoons",
     "startTime": "06:00:00",
     "endTime": "12:00:00",
     "dayOfWeek": [0,1,2,3,4,5,6],
     "bucketId": "cartoons-bucket-id",
-    "playbackMode": "sequential"
+    "playbackMode": "sequential",
+    "priority": 1,
+    "enabled": true
   }'
 ```
+
+**Playback Modes:**
+- **Sequential (Progressive)**: Plays media in order, with progression tracking. **Note**: Only works with buckets containing a single series. Progression continues across days (Day 1: s1e1, s1e2, s1e3... Day 2: s1e4, s1e5, s1e6...) and persists across EPG regenerations.
+- **Shuffle**: Randomizes order once, then plays sequentially
+- **Random**: Shuffles order each time
 
 Then enable dynamic playlists on the channel:
 ```bash
@@ -451,7 +593,10 @@ API documentation is available in OpenAPI format:
 | POST | `/api/channels/:id/stop` | Stop streaming | Yes |
 | GET | `/epg.xml` | EPG (XMLTV) | No |
 | GET | `/:slug/master.m3u8` | Master playlist | No |
-| GET | `/iptv.m3u` | IPTV playlist | No |
+| GET | `/:slug/stream.m3u8` | Media playlist | No |
+| GET | `/playlist.m3u` | IPTV playlist (M3U) | No |
+| GET | `/api/media/count` | Total media files count | No |
+| PUT | `/api/channels/:id/schedule-time` | Update schedule start time | Yes |
 
 ## Development
 
@@ -485,18 +630,29 @@ npm run format
    ffmpeg -version
    ```
 
-2. Verify media directories exist and are readable
+2. **Verify database is running and migrations are applied:**
+   ```bash
+   # Check database connection
+   psql -h localhost -U postgres -d hls_streaming -c "SELECT version FROM schema_migrations ORDER BY version;"
+   
+   # Run migrations if needed
+   npm run migrate
+   ```
 
-3. Check logs:
+3. **Verify media directories exist and are readable**
+
+4. **Check logs:**
    ```bash
    # Docker
    docker-compose logs -f
    
    # Local
-   # Check console output
+   # Check console output or logs directory
    ```
 
-4. Supported formats: `.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`, `.webm`, `.m4v`, `.ts`, `.mpg`, `.mpeg`
+5. **Supported formats**: `.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`, `.webm`, `.m4v`, `.ts`, `.mpg`, `.mpeg`
+
+6. **Verify channel has media assigned**: Use the admin panel at `/admin` to check channel configuration and assigned buckets
 
 ### High CPU Usage?
 
@@ -508,6 +664,290 @@ npm run format
 
 - Ensure user has read access to media directories
 - For Docker, check volume mount permissions
+- Check PostgreSQL user permissions if database operations fail
+
+### Database Connection Errors?
+
+1. **Verify PostgreSQL is running:**
+   ```bash
+   # Local
+   sudo systemctl status postgresql
+   
+   # Docker
+   docker-compose ps postgres
+   ```
+
+2. **Test connection:**
+   ```bash
+   psql -h localhost -U postgres -d hls_streaming -c "SELECT 1;"
+   ```
+
+3. **Check database exists:**
+   ```bash
+   psql -h localhost -U postgres -l | grep hls_streaming
+   ```
+
+4. **Verify credentials in `.env`:**
+   - Check `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
+   - For Docker, use service name as host (e.g., `DB_HOST=postgres`)
+
+### Migration Failures?
+
+See the [Migration Guide](#migration-guide) section below.
+
+### Channel Not Starting?
+
+1. **Check channel has media assigned:**
+   - Use admin panel at `/admin`
+   - Verify buckets are assigned to channel
+   - Verify buckets contain media files
+
+2. **Check FFmpeg logs:**
+   - Look for FFmpeg errors in server logs
+   - Verify media file paths are correct
+   - Check file permissions
+
+3. **Verify schedule blocks (if using dynamic playlists):**
+   - Check schedule blocks are enabled
+   - Verify time ranges are correct
+   - Ensure buckets are assigned to blocks
+
+### EPG Not Generating?
+
+1. **Check EPG is enabled:**
+   ```env
+   ENABLE_EPG=true
+   ```
+
+2. **Verify channel has `schedule_start_time` set:**
+   - Use admin panel to check/update schedule time
+   - Or use API: `PUT /api/channels/:id/schedule-time`
+
+3. **Check channel has media:**
+   - EPG requires media to generate program listings
+
+## Migration Guide
+
+### Understanding Migrations
+
+The system uses 7 database migrations that are applied automatically:
+1. Initial schema (channels, media_files, libraries, buckets)
+2. Schedule blocks support
+3. EPG cache tables
+4. Progression tracking
+5. Schedule time tracking
+6. Additional indexes for performance
+7. Schema updates and optimizations
+
+### Checking Migration Status
+
+```bash
+# Using psql
+psql -h localhost -U postgres -d hls_streaming -c "SELECT version, applied_at FROM schema_migrations ORDER BY version;"
+
+# Using migration script
+npm run migrate
+# The script will show which migrations are already applied
+```
+
+### Running Migrations
+
+**Automatic (Recommended - Cross-Platform):**
+```bash
+npm run migrate
+```
+
+This automatically detects your platform:
+- **Linux/Mac**: Uses `migrate.sh` (bash script with psql)
+  - Works without building the application first
+  - Checks which migrations are already applied
+  - Applies only new migrations
+  - Shows detailed progress
+- **Windows**: Uses `migrate.ts` (TypeScript/Node.js)
+  - Requires dependencies installed (`npm install`)
+  - Uses the TypeScript Database class
+  - Same migration tracking and progress
+
+**Platform-Specific Commands:**
+```bash
+# Force use bash script (Linux/Mac)
+npm run migrate:sh
+
+# Force use TypeScript script (Windows/requires build)
+npm run build
+npm run migrate:ts
+```
+
+**Docker:**
+```bash
+docker-compose exec hls-server npm run migrate
+```
+
+### Migration Troubleshooting
+
+**Migration already applied error:**
+- This is normal - migrations are idempotent
+- The system tracks applied migrations and skips them
+
+**Connection refused:**
+- Verify PostgreSQL is running
+- Check database credentials in `.env`
+- For Docker, ensure PostgreSQL service is healthy
+
+**Permission denied:**
+- Ensure database user has CREATE/ALTER permissions
+- For new databases, user needs to be owner or superuser
+
+**Rollback:**
+- Migrations are designed to be forward-only
+- For rollback, restore from database backup
+- Always backup before major updates
+
+### Manual Migration Application
+
+If automatic migration fails, you can apply migrations manually:
+
+```bash
+# List all migrations
+ls database/migrations/
+
+# Apply specific migration (example)
+psql -h localhost -U postgres -d hls_streaming -f database/migrations/001_initial_schema.sql
+```
+
+**Warning:** Only do this if you understand the migration system. The automatic migration script is safer.
+
+## Performance Tuning
+
+### Database Connection Pool
+
+Adjust connection pool settings in `.env`:
+
+```env
+# Minimum connections (always open)
+DB_POOL_MIN=2
+
+# Maximum connections (peak capacity)
+DB_POOL_MAX=10
+```
+
+**Recommendations:**
+- **Small deployments** (1-3 channels): `DB_POOL_MIN=2`, `DB_POOL_MAX=5`
+- **Medium deployments** (4-10 channels): `DB_POOL_MIN=2`, `DB_POOL_MAX=10`
+- **Large deployments** (10+ channels): `DB_POOL_MIN=5`, `DB_POOL_MAX=20`
+
+**Note:** Each connection uses ~2-5MB of memory. Don't set `DB_POOL_MAX` higher than your PostgreSQL `max_connections` setting.
+
+### FFmpeg Encoding Optimization
+
+**Hardware Acceleration:**
+```env
+# NVIDIA GPU (recommended if available)
+HW_ACCEL=nvenc
+
+# Intel Quick Sync
+HW_ACCEL=qsv
+
+# Apple VideoToolbox (macOS)
+HW_ACCEL=videotoolbox
+
+# CPU only (default)
+HW_ACCEL=none
+```
+
+**Quality vs Performance:**
+```env
+# Lower quality = better performance
+DEFAULT_VIDEO_BITRATE=1000000      # 1 Mbps (low)
+DEFAULT_VIDEO_BITRATE=1500000      # 1.5 Mbps (medium, default)
+DEFAULT_VIDEO_BITRATE=3000000      # 3 Mbps (high)
+DEFAULT_RESOLUTION=1280x720        # 720p (faster)
+DEFAULT_RESOLUTION=1920x1080       # 1080p (default)
+DEFAULT_FPS=24                     # Lower FPS = less CPU
+```
+
+### Concurrent Stream Limits
+
+```env
+# Maximum concurrent FFmpeg processes
+MAX_CONCURRENT_STREAMS=8
+```
+
+**Recommendations:**
+- **CPU encoding**: `MAX_CONCURRENT_STREAMS = CPU cores - 1`
+- **Hardware encoding**: `MAX_CONCURRENT_STREAMS = 2x GPU capability`
+- **Mixed**: Start with 4-6, monitor CPU/GPU usage, adjust accordingly
+
+### HLS Segment Settings
+
+```env
+# Segment duration (seconds)
+DEFAULT_SEGMENT_DURATION=6
+
+# Shorter segments = more frequent updates but more overhead
+# Longer segments = less overhead but slower channel switching
+```
+
+**Recommendations:**
+- **Live streaming**: 4-6 seconds
+- **On-demand**: 6-10 seconds
+- **Low bandwidth**: 8-10 seconds
+
+### PostgreSQL Performance
+
+**For large media libraries (10,000+ files):**
+
+1. **Add indexes** (already included in migrations):
+   ```sql
+   -- These are created automatically, but verify they exist
+   CREATE INDEX IF NOT EXISTS idx_media_files_show_name ON media_files(show_name);
+   CREATE INDEX IF NOT EXISTS idx_media_files_file_exists ON media_files(file_exists);
+   ```
+
+2. **Tune PostgreSQL settings** (`postgresql.conf`):
+   ```ini
+   shared_buffers = 256MB
+   effective_cache_size = 1GB
+   maintenance_work_mem = 128MB
+   checkpoint_completion_target = 0.9
+   wal_buffers = 16MB
+   default_statistics_target = 100
+   random_page_cost = 1.1
+   effective_io_concurrency = 200
+   ```
+
+3. **Regular maintenance:**
+   ```bash
+   # Analyze tables (run weekly)
+   psql -h localhost -U postgres -d hls_streaming -c "ANALYZE;"
+   
+   # Vacuum (run monthly or when needed)
+   psql -h localhost -U postgres -d hls_streaming -c "VACUUM ANALYZE;"
+   ```
+
+### Monitoring Performance
+
+**Key metrics to watch:**
+- Database connection pool usage
+- FFmpeg CPU/GPU usage
+- HLS segment generation rate
+- Memory usage (Node.js + PostgreSQL + FFmpeg)
+- Disk I/O (media files + HLS output)
+
+**Useful commands:**
+```bash
+# Database connections
+psql -h localhost -U postgres -d hls_streaming -c "SELECT count(*) FROM pg_stat_activity WHERE datname = 'hls_streaming';"
+
+# Database size
+psql -h localhost -U postgres -d hls_streaming -c "SELECT pg_size_pretty(pg_database_size('hls_streaming'));"
+
+# FFmpeg processes
+ps aux | grep ffmpeg
+
+# Disk usage
+du -sh hls_output/
+```
 
 ## AI Assistant Integration (MCP Server)
 

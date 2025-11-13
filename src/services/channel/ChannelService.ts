@@ -14,11 +14,13 @@ import { ChannelRepository } from '../../infrastructure/database/repositories/Ch
 import { MediaFileRepository } from '../../infrastructure/database/repositories/MediaFileRepository';
 import { ChannelMediaRepository } from '../../infrastructure/database/repositories/ChannelMediaRepository';
 import { PlaybackSessionRepository } from '../../infrastructure/database/repositories/PlaybackSessionRepository';
-import { VirtualTimeService } from '../virtual-time/VirtualTimeService';
+import { ScheduleTimeService } from '../schedule-time/ScheduleTimeService';
 import { BumperGenerator } from '../bumper/BumperGenerator';
-import { PlaylistManipulator } from '../playlist/PlaylistManipulator';
+// import { PlaylistManipulator } from '../playlist/PlaylistManipulator'; // UNUSED - kept for reference
 import { PlaylistService } from '../playlist/PlaylistService';
 import { EPGService } from '../epg/EPGService';
+import { AsyncMutex } from '../../utils/AsyncMutex';
+import { ConcatFileManager } from '../concat/ConcatFileManager';
 
 const logger = createLogger('ChannelService');
 
@@ -26,11 +28,11 @@ export class ChannelService {
   // In-memory cache for fast access (synced with database)
   private channels: Map<string, Channel> = new Map()
   
-  // Discontinuity tracking for HLS RFC 8216 compliance
-  private channelDiscontinuityCount: Map<string, number> = new Map()
+  // UNUSED: Discontinuity tracking (kept for reference in _injectDiscontinuityTag_unused)
+  // private channelDiscontinuityCount: Map<string, number> = new Map()
   
-  // Playlist manipulator for HLS enhancements
-  private playlistManipulator: PlaylistManipulator = new PlaylistManipulator();
+  // UNUSED: Playlist manipulator (kept for reference in _injectDiscontinuityTag_unused)
+  // private playlistManipulator: PlaylistManipulator = new PlaylistManipulator();
   // Playlist service for transition tracking and tag injection
   // Note: This must be shared with route handlers to ensure transition points are visible
   public readonly playlistService: PlaylistService = new PlaylistService();
@@ -40,110 +42,66 @@ export class ChannelService {
   private readonly mediaFileRepository: MediaFileRepository;
   private readonly channelMediaRepository: ChannelMediaRepository;
   private readonly playbackSessionRepository: PlaybackSessionRepository;
-  private readonly virtualTimeService: VirtualTimeService;
+  private readonly scheduleTimeService: ScheduleTimeService;
   private readonly bumperGenerator: BumperGenerator;
   private readonly epgService: EPGService;
-  private virtualTimeUpdateInterval: NodeJS.Timeout | null = null;
+  private readonly concatFileManager: ConcatFileManager;
   private bucketService?: any; // MediaBucketService - injected via setter
   private playlistResolver?: any; // PlaylistResolver - injected via setter
 
   // Grace period timers for pausing streams after inactivity
   private pauseTimers: Map<string, NodeJS.Timeout> = new Map();
 
-  // Pre-generated bumpers keyed by the target nextIndex. Prevents overwriting when pre-generating for different upcoming files.
-  // Note: In the new pipeline, bumpers stream as separate FFmpeg processes (not merged into playlists)
-  private channelPregenBumpers: Map<string, Map<number, { segmentsDir: string; segmentCount: number }>> = new Map();
+  // Early-start timers: schedule next file to start 6 seconds before current file ends
+  private earlyStartTimers: Map<string, NodeJS.Timeout> = new Map();
+  
+  // Track if early start has already happened for a channel (prevents onFileEnd from starting file again)
+  private earlyStartCompleted: Set<string> = new Set();
+
+  // Pre-generated bumpers keyed by the target file ID (not index, since dynamic playlists can change media order).
+  // Note: In the new pipeline, bumpers are served directly in playlists during transition gaps
+  private channelPregenBumpers: Map<string, Map<string, { segmentsDir: string; segmentCount: number }>> = new Map();
+  
+  // Track channels in transition state (file ended, serving bumper segments until next file starts)
+  private channelsInTransition: Map<string, { nextFileId: string; transitionStartTime: number; bumperInjected: boolean }> = new Map();
+
+  // Per-channel mutexes for transition state operations (prevents race conditions)
+  private transitionMutexes: Map<string, AsyncMutex> = new Map();
 
   // Track active playback session IDs for each channel
   private activeSessionIds: Map<string, string> = new Map();
+
+  // Track file progression for concat streams (maps channelId to progression tracker)
+  private concatProgressionTrackers: Map<string, {
+    startTime: number;
+    mediaFiles: MediaFile[];
+    currentFileIndex: number;
+    intervalId: NodeJS.Timeout;
+  }> = new Map();
+
+  // Track active schedule block IDs for dynamic playlists (used to detect schedule transitions)
+  private activeScheduleBlocks: Map<string, string> = new Map();
 
   constructor(ffmpegEngine: FFmpegEngine) {
     this.ffmpegEngine = ffmpegEngine;
     this.channelRepository = new ChannelRepository();
     this.mediaFileRepository = new MediaFileRepository();
     this.channelMediaRepository = new ChannelMediaRepository();
-    this.virtualTimeService = new VirtualTimeService();
+    this.scheduleTimeService = new ScheduleTimeService();
     this.bumperGenerator = new BumperGenerator();
     this.playbackSessionRepository = new PlaybackSessionRepository();
     this.epgService = new EPGService();
+    this.concatFileManager = new ConcatFileManager();
 
-    // Start virtual time update loop (updates every 10 seconds while streaming)
-    this.startVirtualTimeUpdateLoop();
+    // Set ChannelService reference in PlaylistService for transition detection
+    this.playlistService.setChannelService(this);
+
+    // NOTE: No longer need virtual time update loop with schedule-based approach!
+    // Position is calculated on-demand from schedule_start_time
   }
 
-  /**
-   * Start periodic virtual time updates for streaming channels
-   */
-  private startVirtualTimeUpdateLoop(): void {
-    this.virtualTimeUpdateInterval = setInterval(async () => {
-      try {
-        await this.updateVirtualTimeForStreamingChannels();
-      } catch (error) {
-        logger.error({ error }, 'Error in virtual time update loop');
-      }
-    }, 10000); // Update every 10 seconds
-  }
-
-  /**
-   * Update virtual time for all currently streaming channels
-   */
-  private async updateVirtualTimeForStreamingChannels(): Promise<void> {
-    const streamingChannels = Array.from(this.channels.values()).filter(
-      (ch) => ch.isStreaming()
-    );
-
-    for (const channel of streamingChannels) {
-      try {
-        const media = await this.getChannelMedia(channel.id);
-        if (media.length === 0) continue;
-
-        // CRITICAL: Skip virtual time updates when there are active viewers!
-        // Virtual time is only for tracking position when nobody is watching.
-        // During active streaming, currentIndex is managed by file transitions.
-        const viewerCount = channel.getMetadata().viewerCount;
-        if (viewerCount > 0) {
-          logger.debug(
-            { channelId: channel.id, viewerCount },
-            'Skipping virtual time update (active viewers)'
-          );
-          continue;
-        }
-
-        // Get current virtual time state
-        const virtualTime = await this.virtualTimeService.getChannelVirtualTime(
-          channel.id
-        );
-
-        if (!virtualTime || virtualTime.virtualPausedAt !== null) {
-          continue; // Skip paused channels
-        }
-
-        // Calculate current position
-        const position = this.virtualTimeService.calculateCurrentVirtualPosition(
-          virtualTime,
-          media
-        );
-
-        // Update in database
-        await this.virtualTimeService.advanceVirtualTime(
-          channel.id,
-          position.totalVirtualSeconds,
-          position.currentIndex,
-          position.positionInFile
-        );
-
-        // Update channel's current index if it changed
-        if (position.currentIndex !== channel.getMetadata().currentIndex) {
-          channel.updateCurrentIndex(position.currentIndex);
-          await this.channelRepository.update(channel.id, {
-            current_index: position.currentIndex,
-          });
-        }
-      } catch (error) {
-        logger.error({ error, channelId: channel.id }, 'Failed to update virtual time');
-      }
-    }
-  }
+  // NOTE: Virtual time update loop removed - no longer needed with schedule-based approach
+  // Position is calculated on-demand from schedule_start_time, no periodic updates required
 
   /**
    * Load all channels from database on startup
@@ -251,6 +209,58 @@ export class ChannelService {
 
     logger.info({ channelId: channel.id, slug: config.slug }, 'Channel created');
     return channel;
+  }
+
+  /**
+   * Get or create mutex for a channel
+   */
+  private getMutexForChannel(channelId: string): AsyncMutex {
+    let mutex = this.transitionMutexes.get(channelId);
+    if (!mutex) {
+      mutex = new AsyncMutex();
+      this.transitionMutexes.set(channelId, mutex);
+    }
+    return mutex;
+  }
+
+  /**
+   * Get transition state for a channel (used by PlaylistService)
+   * Returns bumper info if channel is in transition
+   * 
+   * Thread Safety: Uses per-channel mutex to prevent race conditions
+   */
+  public async getTransitionState(channelId: string): Promise<{ nextFileId: string; bumperInfo?: { segmentsDir: string; segmentCount: number }; bumperInjected: boolean } | null> {
+    const mutex = this.getMutexForChannel(channelId);
+    return await mutex.runExclusive(async () => {
+      const transition = this.channelsInTransition.get(channelId);
+      if (!transition) return null;
+
+      const pregenMap = this.channelPregenBumpers.get(channelId);
+      const bumperInfo = pregenMap?.get(transition.nextFileId);
+
+      return {
+        nextFileId: transition.nextFileId,
+        bumperInfo: bumperInfo || undefined,
+        bumperInjected: transition.bumperInjected
+      };
+    });
+  }
+
+  /**
+   * Mark bumper as injected for a channel in transition
+   * This prevents PlaylistService from re-injecting bumper on subsequent playlist requests
+   * 
+   * Thread Safety: Uses per-channel mutex to prevent race conditions
+   */
+  public async markBumperAsInjected(channelId: string): Promise<void> {
+    const mutex = this.getMutexForChannel(channelId);
+    return await mutex.runExclusive(async () => {
+      const transition = this.channelsInTransition.get(channelId);
+      if (transition) {
+        transition.bumperInjected = true;
+        this.channelsInTransition.set(channelId, transition);
+      }
+    });
   }
 
   /**
@@ -396,10 +406,57 @@ export class ChannelService {
    * Invalidate channel media cache
    * Call this when schedule blocks or buckets are added/removed/modified
    * This ensures the channel will re-resolve media on the next getChannelMedia call
+   * 
+   * With concat approach: Also updates the concat file if channel is streaming
    */
-  public invalidateChannelMediaCache(channelId: string): void {
+  public async invalidateChannelMediaCache(channelId: string): Promise<void> {
     this.channelMedia.delete(channelId);
     logger.debug({ channelId }, 'Channel media cache invalidated');
+    
+    // If channel is streaming with concat, update the concat file with new media list
+    const channel = this.channels.get(channelId);
+    if (channel && channel.isStreaming() && this.ffmpegEngine.isActive(channelId)) {
+      try {
+        const media = await this.getChannelMedia(channelId);
+        if (media.length > 0) {
+          const outputDir = path.resolve(channel.config.outputDir);
+          const mediaFilePaths = media.map(m => m.path);
+          const bumperPath = this.concatFileManager.getBumperPath(outputDir);
+          
+          await this.concatFileManager.updateConcatFile(
+            channelId,
+            outputDir,
+            mediaFilePaths,
+            bumperPath
+          );
+          
+          // Update progression tracker with new media list
+          const tracker = this.concatProgressionTrackers.get(channelId);
+          if (tracker) {
+            // Restart tracking with new media list
+            // Use current index but no seek offset (0) since we're just updating the list
+            this.stopConcatProgressionTracking(channelId);
+            this.startConcatProgressionTracking(
+              channelId,
+              media,
+              channel.getMetadata().currentIndex || 0,
+              0, // No seek offset when updating media list
+              channel
+            );
+          }
+          
+          logger.info(
+            { channelId, mediaCount: media.length },
+            'Updated concat file for media list change (dynamic playlist update)'
+          );
+        }
+      } catch (error) {
+        logger.warn(
+          { channelId, error },
+          'Failed to update concat file after media cache invalidation (non-fatal)'
+        );
+      }
+    }
   }
 
   /**
@@ -416,10 +473,8 @@ export class ChannelService {
     // If dynamic playlist is enabled and resolver is available, use resolver
     if (useDynamicPlaylist && this.playlistResolver) {
       try {
-        // Get virtual time context for resolver
-        const virtualTimeState = await this.virtualTimeService.getChannelVirtualTime(channelId);
+        // Prepare context for resolver
         const context = {
-          virtualTime: virtualTimeState?.totalVirtualSeconds,
           currentTime: new Date(), // Always use current time - don't cache dynamic playlists
           currentIndex: channel.getMetadata().currentIndex,
         };
@@ -509,27 +564,38 @@ export class ChannelService {
    */
   public async startChannel(
     channelId: string,
-    startIndex?: number
+    startIndex?: number,
+    isTransition: boolean = false
   ): Promise<void> {
     const channel = await this.getChannel(channelId);
-    // CRITICAL: For dynamic playlists, we should NOT get media here using current time
-    // because EPG will determine the correct media list based on the program's schedule block.
-    // We'll get the media list from EPG after getting the position.
     let media: MediaFile[] = [];
-    
-    // For static playlists, get media now
-    if (!channel.config.useDynamicPlaylist || !this.playlistResolver) {
+
+    // For dynamic playlists with PlaylistResolver, resolve media now based on schedule
+    if (channel.config.useDynamicPlaylist && this.playlistResolver) {
+      logger.debug({ channelId }, 'Dynamic playlist - resolving media from PlaylistResolver');
+      try {
+        media = await this.playlistResolver.resolveMedia(channelId, {
+          currentTime: new Date(),
+          currentIndex: startIndex || 0,
+        });
+        logger.info(
+          { channelId, resolvedMediaCount: media.length },
+          'Resolved media from PlaylistResolver for dynamic playlist'
+        );
+      } catch (error) {
+        logger.error(
+          { channelId, error },
+          'Failed to resolve media from PlaylistResolver'
+        );
+        throw new ValidationError('Failed to resolve media for dynamic playlist');
+      }
+    } else {
+      // For static playlists, get media from channel buckets
       media = await this.getChannelMedia(channelId);
-    }
-    
-    // For dynamic playlists, store media list for comparison in onFileEnd
-    // This allows us to detect schedule block transitions
-    if (channel.config.useDynamicPlaylist) {
-      // We'll set this after we get the EPG media list
-      logger.debug({ channelId }, 'Dynamic playlist - will get media list from EPG');
     }
 
     // Handle orphaned states (STOPPING, ERROR) - reset to IDLE before starting
+    // Also handle STARTING state if we're not in a transition (likely from state restoration)
     const currentState = channel.getState();
     if (currentState === ChannelState.STOPPING || currentState === ChannelState.ERROR) {
       logger.info(
@@ -540,17 +606,43 @@ export class ChannelService {
       await this.channelRepository.update(channelId, {
         state: ChannelState.IDLE,
       });
+    } else if (currentState === ChannelState.STARTING && !isTransition) {
+      // STARTING state from previous failed start - reset to IDLE
+      logger.info(
+        { channelId, currentState },
+        'Resetting orphaned STARTING state to IDLE before starting'
+      );
+      // STARTING can transition to IDLE according to state machine
+      channel.transitionTo(ChannelState.IDLE);
+      await this.channelRepository.update(channelId, {
+        state: ChannelState.IDLE,
+      });
     }
 
-    // Validate state
-    if (!channel.canTransitionTo(ChannelState.STARTING)) {
+    // Validate state (allow transitions to bypass this check)
+    // During transitions, keep channel in STREAMING state (don't change state)
+    // The state machine doesn't allow STREAMING -> STARTING, so we bypass validation for transitions
+    if (!isTransition && !channel.canTransitionTo(ChannelState.STARTING)) {
       throw new ConflictError(`Channel is already ${channel.getState()}`);
     }
+    
+    // During transitions, don't change state - keep it in STREAMING
+    // We'll update it to STREAMING again after the new file starts
+    if (!isTransition && channel.getState() !== ChannelState.STARTING) {
+      // Only transition to STARTING for non-transition starts (and only if not already STARTING)
+      channel.transitionTo(ChannelState.STARTING);
+      await this.channelRepository.update(channelId, {
+        state: ChannelState.STARTING,
+      });
+    }
 
-    // For dynamic playlists, media will be set from EPG below
-    // For static playlists, validate media now
-    if (!channel.config.useDynamicPlaylist && media.length === 0) {
-      throw new ValidationError('Channel has no media files');
+    // Validate that media was resolved successfully
+    if (media.length === 0) {
+      if (channel.config.useDynamicPlaylist) {
+        throw new ValidationError('No media available from schedule blocks for dynamic playlist');
+      } else {
+        throw new ValidationError('Channel has no media files');
+      }
     }
 
     // DEBUG: For dynamic playlists, check what blocks exist and why getActiveBlock might not find them
@@ -587,12 +679,20 @@ export class ChannelService {
     }
 
     try {
-      // Transition to STARTING
-      channel.transitionTo(ChannelState.STARTING);
-      await this.channelRepository.update(channelId, {
-        state: ChannelState.STARTING,
-        started_at: new Date(),
-      });
+      // Transition to STARTING (only if not already in transition and not already STARTING)
+      // During transitions, channel is already in STREAMING state, so skip this
+      if (!isTransition && channel.getState() !== ChannelState.STARTING) {
+        channel.transitionTo(ChannelState.STARTING);
+        await this.channelRepository.update(channelId, {
+          state: ChannelState.STARTING,
+          started_at: new Date(),
+        });
+      } else if (!isTransition && channel.getState() === ChannelState.STARTING) {
+        // Already in STARTING, just update timestamp
+        await this.channelRepository.update(channelId, {
+          started_at: new Date(),
+        });
+      }
 
       // Determine starting position
       // Use virtual time if resuming after pause (channel was paused)
@@ -601,39 +701,23 @@ export class ChannelService {
       let actualStartIndex: number = startIndex ?? channel.getMetadata().currentIndex ?? 0;
       let seekToSeconds = 0;
 
-      const virtualTime = await this.virtualTimeService.getChannelVirtualTime(
-        channelId
-      );
+      // Check if schedule time is initialized
+      const hasScheduleTime = await this.scheduleTimeService.hasScheduleTime(channelId);
 
-      // Log virtual time state to troubleshoot resumption
+      // Log schedule time state
       logger.info(
         {
           channelId,
-          hasVirtualTime: !!virtualTime,
-          virtualStartTime: virtualTime?.virtualStartTime?.toISOString(),
-          virtualPausedAt: virtualTime?.virtualPausedAt?.toISOString(),
-          totalVirtualSeconds: virtualTime?.totalVirtualSeconds,
-          virtualCurrentIndex: virtualTime?.virtualCurrentIndex,
-          virtualPositionInFile: virtualTime?.virtualPositionInFile,
+          hasScheduleTime,
           startIndex,
         },
-        'Virtual time state check in startChannel'
+        'Schedule time state check in startChannel'
       );
 
-      // Use virtual time if:
-      // 1. Virtual timeline exists (virtual_start_time is set)
-      // 2. Channel was paused (virtual_paused_at is set) OR channel is IDLE (resuming after restart/manual start)
-      // 3. Not an explicit startIndex (automatic resume)
-      // 
-      // CRITICAL: Check pause state BEFORE resuming, so we can use the virtual position
-      // If channel is IDLE and has virtual timeline, use stored position (handles resume after server restart)
-      // The stored virtual_current_index and virtual_position_in_file will have the correct values
-      const wasPaused = virtualTime?.virtualPausedAt !== null;
-      const isIdle = channel.getState() === ChannelState.IDLE;
-      const shouldUseVirtualTime =
-        virtualTime?.virtualStartTime &&
-        (wasPaused || isIdle) &&
-        startIndex === undefined;
+      // Use EPG/schedule time if:
+      // 1. Schedule timeline exists (schedule_start_time is set)
+      // 2. Not an explicit startIndex (automatic resume/start)
+      const shouldUseScheduleTime = hasScheduleTime && startIndex === undefined;
 
       // CRITICAL: For dynamic playlists, ALWAYS get media from EPG before anything else
       // This ensures we use the schedule block's media that matches what EPG shows
@@ -725,18 +809,16 @@ export class ChannelService {
           media = await this.getChannelMedia(channelId);
         }
       }
-      
-      if (shouldUseVirtualTime) {
-        // Channel was paused - use EPG as the single source of truth for resume position
+
+      if (shouldUseScheduleTime) {
+        // Use EPG as the single source of truth for position
         // EPG knows what should be playing now based on program schedule
         logger.debug(
           {
             channelId,
-            totalVirtualSeconds: virtualTime.totalVirtualSeconds,
-            virtualPausedAt: virtualTime.virtualPausedAt?.toISOString(),
             mediaCount: media.length,
           },
-          'Getting resume position from EPG (single source of truth)'
+          'Getting position from EPG (single source of truth)'
         );
         
         // Media was already set above from EPG for dynamic playlists
@@ -760,6 +842,17 @@ export class ChannelService {
         
         const epgPosition = media.length > 0 ? await this.epgService.getCurrentPlaybackPosition(channel, media) : null;
         if (epgPosition) {
+          logger.info(
+            {
+              channelId,
+              epgFileIndex: epgPosition.fileIndex,
+              epgSeekPosition: epgPosition.seekPosition,
+              mediaCount: media.length,
+              epgFileAtPosition: media[epgPosition.fileIndex]?.getDisplayName(),
+              epgFileAtPositionFilename: media[epgPosition.fileIndex]?.filename,
+            },
+            'EPG position calculation result'
+          );
           actualStartIndex = epgPosition.fileIndex;
           seekToSeconds = epgPosition.seekPosition;
           
@@ -861,24 +954,36 @@ export class ChannelService {
           // EPG couldn't determine position - fallback to virtual time
           logger.warn(
             { channelId },
-            'EPG could not determine position, falling back to virtual time calculation'
+            'EPG could not determine position, falling back to schedule time calculation'
           );
           
-          const position = this.virtualTimeService.calculateCurrentVirtualPosition(
-            virtualTime,
+          const position = await this.scheduleTimeService.getCurrentPosition(
+            channelId,
             media
           );
-          actualStartIndex = position.currentIndex;
-          seekToSeconds = position.positionInFile;
+          logger.info(
+            {
+              channelId,
+              scheduleFileIndex: position?.fileIndex,
+              scheduleSeekPosition: position?.seekPosition,
+              hasPosition: !!position,
+              mediaCount: media.length,
+              willUseIndex: position?.fileIndex || 0,
+              fileAtFallbackIndex: media[position?.fileIndex || 0]?.getDisplayName(),
+            },
+            'Schedule time position calculation result (EPG fallback)'
+          );
+          actualStartIndex = position?.fileIndex || 0;
+          seekToSeconds = position?.seekPosition || 0;
 
           logger.info(
             {
               channelId,
-              virtualIndex: actualStartIndex,
-              virtualPosition: seekToSeconds,
-              method: 'Virtual time fallback',
+              scheduleIndex: actualStartIndex,
+              schedulePosition: seekToSeconds,
+              method: 'Schedule time fallback',
             },
-            'Resuming from virtual time position (EPG fallback)'
+            'Resuming from schedule time position (EPG fallback)'
           );
         }
       } else if (startIndex !== undefined) {
@@ -925,8 +1030,8 @@ export class ChannelService {
       }
 
       // Initialize virtual timeline if it doesn't exist
-      if (!virtualTime?.virtualStartTime) {
-        await this.virtualTimeService.initializeVirtualTimeline(channelId);
+      if (!hasScheduleTime) {
+        await this.scheduleTimeService.initializeScheduleTime(channelId);
       }
 
       // CRITICAL: Validate media is not empty before proceeding
@@ -965,26 +1070,64 @@ export class ChannelService {
         for (let i = 0; i < actualStartIndex; i++) {
           accumulatedSeconds += media[i].metadata?.duration || 0;
         }
-        await this.virtualTimeService.advanceVirtualTime(
-          channelId,
-          accumulatedSeconds,
-          actualStartIndex,
-          0
-        );
+        // NOTE: No longer advancing virtual time - position calculated on-demand from schedule_start_time
       }
 
-      // Resume virtual time if paused
-      if (virtualTime && virtualTime.virtualPausedAt !== null) {
-        await this.virtualTimeService.resumeVirtualTime(channelId, media);
-      }
+      // NOTE: No longer need to resume/pause virtual time with schedule-based approach
 
       const currentFile = media[actualStartIndex];
-      
+
       // Calculate expected segment count for accurate end-of-file detection
       const fileDuration = currentFile.metadata.duration; // seconds
       const remainingDuration = Math.max(0, fileDuration - seekToSeconds);
       const expectedSegmentCount = Math.ceil(remainingDuration / channel.config.segmentDuration);
       const expectedEndTime = Date.now() + (remainingDuration * 1000); // milliseconds
+
+      // Cancel any existing early-start timer for this channel
+      const existingEarlyStartTimer = this.earlyStartTimers.get(channelId);
+      if (existingEarlyStartTimer) {
+        clearTimeout(existingEarlyStartTimer);
+        this.earlyStartTimers.delete(channelId);
+      }
+
+      // Schedule next file to start 6 seconds before current file ends (if remaining duration > 6 seconds)
+      // Add 1 second buffer to account for timing variations and ensure segments are ready
+      if (remainingDuration > 7 && !isTransition) {
+        const earlyStartDelay = Math.max(0, (remainingDuration - 7) * 1000); // milliseconds (7s = 6s target + 1s buffer)
+        const earlyStartTimer = setTimeout(async () => {
+          try {
+            // Clear the flag before starting (in case it was set from a previous transition)
+            this.earlyStartCompleted.delete(channelId);
+            await this.startNextFileEarly(channelId, actualStartIndex);
+            // Mark early start as completed
+            this.earlyStartCompleted.add(channelId);
+          } catch (error) {
+            logger.error({ error, channelId }, 'Failed to start next file early');
+            // Clear flag on error so onFileEnd can handle transition normally
+            this.earlyStartCompleted.delete(channelId);
+          }
+        }, earlyStartDelay);
+        
+        this.earlyStartTimers.set(channelId, earlyStartTimer);
+        
+        logger.info(
+          {
+            channelId,
+            currentFile: currentFile.filename,
+            remainingDuration,
+            earlyStartDelayMs: earlyStartDelay,
+            earlyStartTime: new Date(Date.now() + earlyStartDelay).toISOString(),
+            expectedEndTime: new Date(expectedEndTime).toISOString(),
+            note: 'Starting 7 seconds early (6s target + 1s buffer)'
+          },
+          'Scheduled next file to start 6 seconds before current file ends'
+        );
+      } else {
+        logger.debug(
+          { channelId, remainingDuration, isTransition },
+          'Skipping early-start scheduling (duration too short or transition)'
+        );
+      }
       
       logger.info(
         {
@@ -1007,521 +1150,375 @@ export class ChannelService {
         current_index: actualStartIndex,
       });
 
-      // Create stream config for single file
+      // Create stream config using concat approach
       const outputDir = path.resolve(channel.config.outputDir);
 
-      // CRITICAL: If starting from virtual time position, clean up old playlist!
-      // Otherwise append_list will keep old segments and player will start from wrong file
-      if (shouldUseVirtualTime) {
-        const playlistPath = path.join(outputDir, 'stream.m3u8');
-        try {
-          await fs.unlink(playlistPath);
-          logger.info(
-            { channelId, actualStartIndex, file: currentFile.filename },
-            'Deleted old playlist (starting from virtual time position - need fresh playlist)'
-          );
-        } catch (error) {
-          // Playlist might not exist - that's fine
-          logger.debug({ channelId }, 'No old playlist to delete');
-        }
+      // CRITICAL: Ensure output directory exists BEFORE creating concat file
+      // Previously, FFmpegEngine.start() created this directory, but with concat approach
+      // we need the directory to exist when writing concat.txt
+      await fs.mkdir(outputDir, { recursive: true });
+      logger.debug({ channelId, outputDir }, 'Created output directory for concat file');
 
-        // Also clean up old segments so FFmpeg starts fresh from segment 0
+      // CRITICAL: Clean up old HLS segments before starting (unless this is a transition)
+      // Old segments from previous runs can cause confusion and playback issues
+      // FFmpeg's delete_segments flag handles cleanup during streaming, but we need to start clean
+      if (!isTransition) {
         try {
           const files = await fs.readdir(outputDir);
-          let cleaned = 0;
-          for (const file of files) {
-            if (file.endsWith('.ts')) {
-              await fs.unlink(path.join(outputDir, file));
-              cleaned++;
+          const segments = files.filter(f => f.endsWith('.ts') && f.startsWith('stream_'));
+          let deletedCount = 0;
+          for (const segment of segments) {
+            try {
+              await fs.unlink(path.join(outputDir, segment));
+              deletedCount++;
+            } catch (err) {
+              // Continue on error - segment might be in use or already deleted
             }
           }
-          if (cleaned > 0) {
-            logger.info({ channelId, cleaned }, 'Cleaned old segments for fresh start');
+          if (deletedCount > 0) {
+            logger.info(
+              { channelId, outputDir, deletedCount },
+              'Cleaned up old HLS segments before starting stream'
+            );
           }
         } catch (error) {
-          logger.debug({ channelId, error }, 'Failed to clean old segments (non-fatal)');
+          // Non-fatal - directory might not exist or cleanup failed
+          logger.warn(
+            { channelId, outputDir, error },
+            'Failed to clean up old segments before start (non-fatal)'
+          );
+        }
+      } else {
+        logger.debug({ channelId }, 'Skipping segment cleanup (transition start)');
+      }
+
+      // For dynamic playlists, media is already resolved from PlaylistResolver earlier
+      // For static playlists, use the media from getChannelMedia
+      // All media is now in the 'media' array and ready for concat file creation
+      logger.info(
+        {
+          channelId,
+          mediaCount: media.length,
+          isDynamic: channel.config.useDynamicPlaylist,
+          sampleFiles: media.slice(0, 3).map(m => m.filename)
+        },
+        'Building concat file with resolved media'
+      );
+
+      // Get all media file paths for concat file
+      const mediaFilePaths = media.map(m => m.path);
+
+      // Get bumper file path (same path, content gets overwritten when episodes start)
+      const bumperPath = this.concatFileManager.getBumperPath(outputDir);
+
+      // CRITICAL: Generate bumper BEFORE creating concat file
+      // The concat file checks for bumper existence for each file, so it must exist before concat file creation
+      logger.debug(
+        { 
+          channelId, 
+          includeBumpers: channel.config.includeBumpers,
+          mediaCount: media.length,
+          actualStartIndex,
+          bumperPath 
+        },
+        'Checking if bumper should be generated'
+      );
+      
+      if (channel.config.includeBumpers !== false) {
+        // Generate bumper for the next episode (after current one)
+        // This ensures the bumper exists when the concat file is created
+        const nextFileIndex = (actualStartIndex + 1) % media.length;
+        const nextFile = media[nextFileIndex];
+        
+        logger.debug(
+          { channelId, nextFileIndex, hasNextFile: !!nextFile, nextFileName: nextFile?.filename },
+          'Preparing to generate bumper'
+        );
+        
+        if (nextFile) {
+          try {
+            logger.info(
+              { 
+                channelId, 
+                nextFile: nextFile.filename,
+                showName: nextFile.info.showName,
+                episodeName: nextFile.info.title || nextFile.getDisplayName(),
+                bumperPath,
+                duration: channel.config.segmentDuration
+              },
+              'Starting bumper generation for next episode'
+            );
+            
+            await this.bumperGenerator.generateBumperMP4(
+              {
+                showName: nextFile.info.showName,
+                episodeName: nextFile.info.title || nextFile.getDisplayName(),
+                duration: channel.config.segmentDuration, // One segment duration
+                resolution: channel.config.resolution,
+                fps: channel.config.fps,
+                videoBitrate: channel.config.videoBitrate,
+                audioBitrate: channel.config.audioBitrate,
+              },
+              bumperPath
+            );
+            
+            // Verify bumper was created
+            try {
+              await fs.access(bumperPath);
+              const stats = await fs.stat(bumperPath);
+              logger.info(
+                { 
+                  channelId, 
+                  nextFile: nextFile.filename, 
+                  bumperPath,
+                  sizeBytes: stats.size,
+                  sizeMB: (stats.size / 1024 / 1024).toFixed(2)
+                },
+                'Bumper MP4 generated and verified successfully (before concat file creation)'
+              );
+            } catch (verifyError) {
+              logger.error(
+                { error: verifyError, channelId, bumperPath },
+                'Bumper generation reported success but file does not exist!'
+              );
+            }
+          } catch (error) {
+            logger.warn(
+              { 
+                channelId, 
+                error: error instanceof Error ? error.message : String(error),
+                errorStack: error instanceof Error ? error.stack : undefined,
+                nextFile: nextFile.filename,
+                bumperPath
+              },
+              'Failed to generate bumper before concat file creation, will try placeholder'
+            );
+            // Fallback: try to generate a simple placeholder
+            try {
+              const firstFile = media[0];
+              logger.info(
+                { channelId, firstFile: firstFile?.filename, bumperPath },
+                'Attempting to generate placeholder bumper as fallback'
+              );
+              
+              await this.bumperGenerator.generateBumperMP4(
+                {
+                  showName: firstFile?.info.showName || channel.config.name,
+                  episodeName: 'Loading...',
+                  duration: channel.config.segmentDuration,
+                  resolution: channel.config.resolution,
+                  fps: channel.config.fps,
+                  videoBitrate: channel.config.videoBitrate,
+                  audioBitrate: channel.config.audioBitrate,
+                },
+                bumperPath
+              );
+              
+              // Verify placeholder was created
+              try {
+                await fs.access(bumperPath);
+                logger.info({ channelId, bumperPath }, 'Placeholder bumper generated and verified as fallback');
+              } catch (verifyError) {
+                logger.error(
+                  { error: verifyError, channelId, bumperPath },
+                  'Placeholder bumper generation reported success but file does not exist!'
+                );
+              }
+            } catch (placeholderError) {
+              logger.error(
+                { 
+                  error: placeholderError instanceof Error ? placeholderError.message : String(placeholderError),
+                  errorStack: placeholderError instanceof Error ? placeholderError.stack : undefined,
+                  channelId, 
+                  bumperPath 
+                },
+                'Failed to generate placeholder bumper - concat file will skip bumpers'
+              );
+            }
+          }
+        } else {
+          // No next file - generate placeholder
+          logger.info(
+            { channelId, mediaCount: media.length, actualStartIndex },
+            'No next file available, generating placeholder bumper'
+          );
+          try {
+            const firstFile = media[0];
+            await this.bumperGenerator.generateBumperMP4(
+              {
+                showName: firstFile?.info.showName || channel.config.name,
+                episodeName: 'Loading...',
+                duration: channel.config.segmentDuration,
+                resolution: channel.config.resolution,
+                fps: channel.config.fps,
+                videoBitrate: channel.config.videoBitrate,
+                audioBitrate: channel.config.audioBitrate,
+              },
+              bumperPath
+            );
+            
+            // Verify placeholder was created
+            try {
+              await fs.access(bumperPath);
+              logger.info({ channelId, bumperPath }, 'Placeholder bumper generated and verified (no next file)');
+            } catch (verifyError) {
+              logger.error(
+                { error: verifyError, channelId, bumperPath },
+                'Placeholder bumper generation reported success but file does not exist!'
+              );
+            }
+          } catch (error) {
+            logger.error(
+              { 
+                error: error instanceof Error ? error.message : String(error),
+                errorStack: error instanceof Error ? error.stack : undefined,
+                channelId, 
+                bumperPath 
+              },
+              'Failed to generate placeholder bumper - concat file will skip bumpers'
+            );
+          }
+        }
+      } else {
+        logger.debug({ channelId }, 'Bumpers disabled (includeBumpers === false), skipping bumper generation');
+      }
+
+      // For dynamic playlists, get and track the active schedule block ID
+      // This allows detection of schedule block transitions during playback
+      let scheduleBlockId: string | undefined;
+      if (channel.config.useDynamicPlaylist && this.playlistResolver) {
+        try {
+          const activeBlock = await this.playlistResolver.scheduleRepository?.getActiveBlock(
+            channelId,
+            new Date()
+          );
+          if (activeBlock) {
+            scheduleBlockId = activeBlock.id;
+            this.activeScheduleBlocks.set(channelId, activeBlock.id);
+            logger.debug(
+              { channelId, scheduleBlockId, scheduleBlockName: activeBlock.name },
+              'Tracking schedule block for dynamic playlist'
+            );
+          }
+        } catch (error) {
+          logger.warn({ error, channelId }, 'Failed to get active schedule block');
         }
       }
 
-      // With append_list flag: FFmpeg reads existing playlist to continue segment numbering
-      // append_list automatically:
-      // - Reads last segment number from existing playlist
-      // - Continues numbering from there
-      // - Adds EXT-X-DISCONTINUITY via discont_start flag
-      // - Cleans old segments via delete_segments flag
-      logger.info({ channelId }, 'Starting stream with append_list (continuous playlist)');
+      // Create concat file starting from actualStartIndex with seeking support
+      // This allows us to resume from a specific file and position when restarting
+      // The bumper should now exist from the generation above
+      
+      // Log what we're about to create the concat file with
+      logger.info(
+        {
+          channelId,
+          actualStartIndex,
+          seekToSeconds,
+          mediaCount: mediaFilePaths.length,
+          startFile: media[actualStartIndex]?.filename,
+          startFileTitle: media[actualStartIndex]?.getDisplayName(),
+          startFilePath: mediaFilePaths[actualStartIndex],
+          firstFewFiles: media.slice(0, 5).map(m => m.getDisplayName()),
+        },
+        'Creating concat file with EPG-calculated position'
+      );
+      
+      const { concatFilePath, startPosition } = await this.concatFileManager.createConcatFile(
+        channelId,
+        outputDir,
+        mediaFilePaths,
+        bumperPath,
+        actualStartIndex,
+        seekToSeconds,
+        scheduleBlockId // Pass schedule block ID for metadata tracking
+      );
+
+      logger.info({ channelId, concatFilePath, mediaCount: media.length }, 'Starting stream with concat file');
 
       const streamConfig: StreamConfig = {
-        inputFile: currentFile.path,
+        concatFile: concatFilePath,
         outputDir: outputDir,
         videoBitrate: channel.config.videoBitrate,
         audioBitrate: channel.config.audioBitrate,
         resolution: channel.config.resolution,
         fps: channel.config.fps,
         segmentDuration: channel.config.segmentDuration,
-        startPosition: seekToSeconds > 0 ? seekToSeconds : undefined, // Seek if resuming
+        // startPosition is handled by inpoint in the concat file, so we don't need -ss
+        // But we keep it for compatibility (it will be 0 when using concat)
+        startPosition: startPosition,
       };
 
-      // Placeholder creation now happens earlier in startChannel (after cleanup)
-
-      // Set up callback for when current file finishes (transition to next file)
-      const onFileEnd = async () => {
-        try {
-          const currentChannel = this.channels.get(channelId);
-          if (!currentChannel) {
-            logger.warn({ channelId }, 'Channel no longer exists, skipping file transition');
-            return;
-          }
-
-          // Only continue if channel is still supposed to be streaming
-          if (!currentChannel.isStreaming() && currentChannel.getState() !== ChannelState.STREAMING) {
-            logger.info({ channelId }, 'Channel no longer streaming, skipping file transition');
-            return;
-          }
-
-          const currentMedia = await this.getChannelMedia(channelId);
-          if (currentMedia.length === 0) {
-            logger.warn({ channelId }, 'No media files available for transition');
-            return;
-          }
-
-          // CRITICAL: Detect if media list changed (schedule block transition)
-          // For dynamic playlists, the media list can change when schedule blocks transition
-          // Use stored media from start of file (not from cache which is empty for dynamic playlists)
-          const previousMedia = currentChannel.config.useDynamicPlaylist 
-            ? (this.channelMedia.get(channelId) || [])
-            : [];
-          const mediaListChanged = currentChannel.config.useDynamicPlaylist && (
-            currentMedia.length !== previousMedia.length ||
-            currentMedia.some((m, i) => !previousMedia[i] || m.id !== previousMedia[i].id)
-          );
-
-          // If media list changed, reset to beginning of new schedule block
-          if (mediaListChanged) {
-            logger.info(
-              {
-                channelId,
-                previousMediaCount: previousMedia.length,
-                currentMediaCount: currentMedia.length,
-                previousMediaIds: previousMedia.slice(0, 3).map(m => m.id),
-                currentMediaIds: currentMedia.slice(0, 3).map(m => m.id),
-              },
-              'Schedule block changed - media list changed, resetting to start of new block'
-            );
-            // Store current media list for next comparison (only for dynamic playlists)
-            if (currentChannel.config.useDynamicPlaylist) {
-              this.channelMedia.set(channelId, [...currentMedia]); // Store copy for next comparison
-            }
-          }
-
-          let nextIndex: number;
-
-          // EPG as single source of truth - try EPG first
-          try {
-            const epgFileIndex = await this.epgService.getCurrentFileIndexFromEPG(
-              currentChannel,
-              currentMedia
-            );
-
-            if (epgFileIndex !== null) {
-              // EPG determined what should be playing - use it
-              nextIndex = epgFileIndex;
-              
-              logger.info(
-                {
-                  channelId,
-                  currentIndex: currentChannel.getMetadata().currentIndex,
-                  nextIndex,
-                  nextFile: currentMedia[nextIndex]?.filename,
-                  source: 'EPG',
-                  mediaListChanged,
-                },
-                'Current file finished, transitioning to next file based on EPG schedule (single source of truth)'
-              );
-            } else {
-              // EPG unavailable - fall back to existing logic
-              throw new Error('EPG unavailable, using fallback logic');
-            }
-          } catch (epgError) {
-            // EPG failed or unavailable - use existing fallback logic
-            
-            // If media list changed, always start from beginning of new block
-            if (mediaListChanged) {
-              nextIndex = 0;
-              logger.info(
-                {
-                  channelId,
-                  nextIndex,
-                  nextFile: currentMedia[0]?.filename,
-                  reason: 'schedule block changed, starting from beginning',
-                },
-                'Schedule block changed, starting from beginning of new block'
-              );
-            } else {
-              // Media list unchanged - use normal transition logic
-              const currentViewerCount = currentChannel.getMetadata().viewerCount;
-              
-              // If there are active viewers, transition immediately to next file (start at beginning)
-              // Virtual time is only for resuming after no viewers, not during active streaming
-              if (currentViewerCount > 0) {
-                // Active streaming - just go to next file in sequence
-                const currentIndex = currentChannel.getMetadata().currentIndex;
-                nextIndex = (currentIndex + 1) % currentMedia.length;
-                
-                logger.info(
-                  {
-                    channelId,
-                    currentIndex,
-                    nextIndex,
-                    nextFile: currentMedia[nextIndex]?.filename,
-                    viewerCount: currentViewerCount,
-                    fallback: 'sequential (active streaming)',
-                  },
-                  'Current file finished, transitioning to next file (EPG unavailable, using sequential fallback)'
-                );
-              } else {
-                // No viewers - use virtual time to determine position
-                const virtualTimeState = await this.virtualTimeService.getChannelVirtualTime(
-                  channelId
-                );
-                if (!virtualTimeState || !virtualTimeState.virtualStartTime) {
-                  // No virtual time state - fall back to sequential transition
-                  const currentIndex = currentChannel.getMetadata().currentIndex;
-                  nextIndex = (currentIndex + 1) % currentMedia.length;
-                  
-                  logger.info(
-                    {
-                      channelId,
-                      currentIndex,
-                      nextIndex,
-                      nextFile: currentMedia[nextIndex]?.filename,
-                      fallback: 'sequential (no virtual time)',
-                    },
-                    'Current file finished, transitioning to next file (EPG unavailable, no virtual time, using sequential)'
-                  );
-                } else {
-                  // Calculate where we should be in the virtual timeline
-                  const position = this.virtualTimeService.calculateCurrentVirtualPosition(
-                    virtualTimeState,
-                    currentMedia
-                  );
-                  
-                  const currentIndex = currentChannel.getMetadata().currentIndex;
-                  
-                  // If virtual time says we're at the same file, advance to next
-                  // Otherwise use virtual time position
-                  if (position.currentIndex === currentIndex) {
-                    // Same file - advance to next in sequence
-                    nextIndex = (currentIndex + 1) % currentMedia.length;
-                    logger.info(
-                      {
-                        channelId,
-                        currentIndex,
-                        nextIndex,
-                        nextFile: currentMedia[nextIndex]?.filename,
-                        reason: 'virtual time at same file, advancing to next',
-                        fallback: 'virtual time (same file)',
-                      },
-                      'Current file finished, advancing to next file (EPG unavailable, virtual time at same position)'
-                    );
-                  } else {
-                    // Virtual time says we should be at a different file
-                    nextIndex = position.currentIndex;
-                    logger.info(
-                      {
-                        channelId,
-                        currentIndex,
-                        nextIndex,
-                        nextFile: currentMedia[nextIndex]?.filename,
-                        virtualPosition: position.positionInFile,
-                        fallback: 'virtual time',
-                      },
-                      'Current file finished, transitioning to next file (EPG unavailable, using virtual time)'
-                    );
-                  }
-                }
-              }
-            }
-          }
-
-          // CRITICAL: Validate nextIndex is within bounds
-          if (nextIndex < 0 || nextIndex >= currentMedia.length) {
-            logger.warn(
-              {
-                channelId,
-                nextIndex,
-                mediaCount: currentMedia.length,
-                mediaListChanged,
-              },
-              'Next index is out of bounds, resetting to 0'
-            );
-            nextIndex = 0;
-          }
-
-          // Validate file exists before accessing
-          const nextFile = currentMedia[nextIndex];
-          if (!nextFile) {
-            logger.error(
-              {
-                channelId,
-                nextIndex,
-                mediaCount: currentMedia.length,
-                mediaListChanged,
-              },
-              'Next file not found, cannot transition'
-            );
-            return; // Stop transition
-          }
-
-          // FFmpeg process has already ended, prepare for next file
-          // Longer delay to ensure Roku players have time to fetch the last playlist update
-          // Roku is slow at playlist refreshes, needs 1.5s minimum
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          
-          // Update index first (before state transition to avoid conflicts)
-          currentChannel.updateCurrentIndex(nextIndex);
-
-          // CRITICAL: Update total_virtual_seconds to match the new file position
-          // This prevents the virtual time loop from resetting currentIndex back to 0!
-          // Calculate accumulated time up to the START of the next file
-          let accumulatedSeconds = 0;
-          for (let i = 0; i < nextIndex; i++) {
-            accumulatedSeconds += currentMedia[i].metadata?.duration || 0;
-          }
-
-          logger.info(
-            {
-              channelId,
-              nextIndex,
-              accumulatedSeconds,
-              nextFile: nextFile.filename,
-            },
-            'Updating virtual time to match file transition'
-          );
-
-          await this.channelRepository.update(channelId, {
-            current_index: nextIndex,
-          });
-
-          // Update virtual time in database
-          await this.virtualTimeService.advanceVirtualTime(
-            channelId,
-            accumulatedSeconds,
-            nextIndex,
-            0 // Starting at beginning of next file
-          );
-
-          // Update bucket progression for sequential playback with schedule blocks
-          if (currentChannel.config.useDynamicPlaylist && this.playlistResolver && this.bucketService) {
-            try {
-              // Get active schedule block to find bucket
-              const ScheduleRepository = (await import('../../infrastructure/database/repositories/ScheduleRepository')).ScheduleRepository;
-              const scheduleRepository = new ScheduleRepository();
-              const activeBlock = await scheduleRepository.getActiveBlock(channelId, new Date());
-              
-              if (activeBlock && activeBlock.bucket_id && activeBlock.playback_mode === 'sequential') {
-                // For sequential playback, track progression so we can resume next time the block runs
-                // The media list returned by resolver might be rotated, so we need the original bucket order
-                const bucketMediaIds = await this.bucketService.getMediaInBucket(activeBlock.bucket_id);
-                
-                if (nextFile) {
-                  // Find the position in the original bucket order
-                  const positionInBucket = bucketMediaIds.indexOf(nextFile.id);
-                  
-                  if (positionInBucket !== -1) {
-                    // Update progression to track where we'll be starting from next time
-                    // This is the position we're transitioning TO, which will be the start position next time
-                    await this.bucketService.updateProgression({
-                      channelId,
-                      bucketId: activeBlock.bucket_id,
-                      lastPlayedMediaId: nextFile.id,
-                      currentPosition: positionInBucket,
-                    });
-                    
-                    logger.debug(
-                      { channelId, bucketId: activeBlock.bucket_id, position: positionInBucket, mediaId: nextFile.id, mediaName: nextFile.filename },
-                      'Updated bucket progression for sequential playback (will resume from this position next time block runs)'
-                    );
-                  }
-                }
-              }
-            } catch (error) {
-              // Log but don't fail transition if progression update fails
-              logger.warn({ channelId, error }, 'Failed to update bucket progression, continuing transition');
-            }
-          }
-
-          // FFmpeg process has already ended, so clear the streaming state
-          // Manually transition to IDLE (bypassing normal stop flow since FFmpeg already stopped)
-          if (currentChannel.isStreaming() || currentChannel.getState() === ChannelState.STARTING) {
-            try {
-              if (currentChannel.getState() === ChannelState.STREAMING) {
-                currentChannel.transitionTo(ChannelState.STOPPING);
-              }
-              currentChannel.transitionTo(ChannelState.IDLE);
-              await this.channelRepository.update(channelId, { state: ChannelState.IDLE });
-            } catch (stateError) {
-              logger.warn({ channelId, stateError }, 'State transition issue during file transition');
-            }
-          }
-
-          // === BETA APPROACH: Stream bumper as separate FFmpeg process ===
-          // Seamless flow: File1 ends ? Stream Bumper ? Wait 500ms ? Start File2 ? Buffer segments
-          // No playlist merging, no MEDIA-SEQUENCE juggling, just clean sequential streaming
-
-          // Get channel configuration for bumper streaming
-          const channel = this.channels.get(channelId);
-          if (!channel) throw new Error('Channel not found');
-
-          // Check if bumpers are enabled for this channel
-          const includeBumpers = channel.config.includeBumpers !== false; // Default to true for backward compatibility
-
-          // Check if we have a pre-generated bumper for the NEXT file
-          let pregenMap = this.channelPregenBumpers.get(channelId);
-          let bumperInfo = pregenMap?.get(nextIndex);
-
-          logger.info(
-            { channelId, hasBumperInfo: !!bumperInfo, includeBumpers, nextIndex, nextFile: nextFile.filename },
-            'Checking for pre-generated bumper'
-          );
-
-          try {
-            // If bumpers are enabled and we have a pre-generated bumper, stream it as separate FFmpeg process
-            if (includeBumpers && bumperInfo?.segmentsDir && bumperInfo.segmentCount) {
-              try {
-                // Find the first bumper segment file
-                const segmentFiles = await fs.readdir(bumperInfo.segmentsDir);
-                const bumperFile = segmentFiles.find(f => f.endsWith('.ts') && f.startsWith('bumper_'));
-
-                if (bumperFile) {
-                  const bumperPath = path.join(bumperInfo.segmentsDir, bumperFile);
-
-                  logger.info(
-                    { channelId, bumperPath, nextFile: nextFile.filename },
-                    'Streaming bumper between files'
-                  );
-
-                  // Stream bumper - blocks until finished
-                  // FFmpeg will automatically detect transition point (no file-system race condition)
-                  await this.ffmpegEngine.streamBumper(channelId, bumperPath, {
-                    inputFile: bumperPath,
-                    outputDir: channel.config.outputDir,
-                    videoBitrate: channel.config.videoBitrate,
-                    audioBitrate: channel.config.audioBitrate,
-                    resolution: channel.config.resolution,
-                    fps: channel.config.fps,
-                    segmentDuration: channel.config.segmentDuration
-                  });
-
-                  logger.info({ channelId }, 'Bumper finished (FFmpeg handles discontinuity tags automatically)');
-
-                  // Clean up bumper directory after use
-                  setTimeout(async () => {
-                    try {
-                      await fs.rm(bumperInfo.segmentsDir, { recursive: true, force: true });
-                      logger.debug({ channelId, segmentsDir: bumperInfo.segmentsDir }, 'Cleaned up bumper directory');
-
-                      // Remove from pregen map
-                      const m = this.channelPregenBumpers.get(channelId);
-                      if (m) m.delete(nextIndex);
-                    } catch {}
-                  }, 2000);
-                } else {
-                  logger.warn({ channelId }, 'Bumper file not found, skipping bumper');
-                }
-              } catch (bumperError) {
-                logger.error({ error: bumperError, channelId }, 'Bumper streaming failed, proceeding without bumper');
-              }
-            } else {
-              if (!includeBumpers) {
-                logger.debug({ channelId }, 'Bumpers disabled for this channel, skipping bumper');
-              } else {
-                logger.info({ channelId }, 'No bumper available, transitioning directly to next file');
-              }
-            }
-
-            // Longer delay after bumper for Roku to process playlist changes
-            // Roku needs time to fetch updated playlist and parse discontinuity tags
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-
-            // Start next file (bumper has finished)
-            logger.info({ channelId, nextIndex, nextFile: nextFile.filename }, 'Starting next file after bumper');
-
-            await this.startChannel(channelId, nextIndex);
-
-            // Transition point for discontinuity tag injection is recorded automatically
-            // when FFmpeg starts and detects a transition (first new segment written)
-
-            // Pre-generate bumper for the NEXT transition (only if bumpers are enabled)
-            if (includeBumpers) {
-              // CRITICAL: Pass nextIndex so bumper is generated for the correct file!
-              // Without it, preGenerateBumper reads stale/updated currentIndex from DB
-              setTimeout(() => {
-                this.preGenerateBumper(channelId, nextIndex).catch(() => {});
-              }, 2000);
-            }
-          } catch (error) {
-            logger.error({ error, channelId, stack: error instanceof Error ? error.stack : undefined }, 'CRITICAL: Transition failed, attempting recovery');
-            // Fallback: try to start next file
-            try {
-              await this.startChannel(channelId, nextIndex);
-              logger.info({ channelId }, 'Recovery startChannel succeeded');
-            } catch (recoveryError) {
-              logger.error({ error: recoveryError, channelId }, 'FATAL: Recovery startChannel also failed');
-            }
-          }
-        } catch (error) {
-          logger.error(
-            { error, channelId },
-            'Failed to transition to next file'
-          );
-          const currentChannel = this.channels.get(channelId);
-          if (currentChannel) {
-            currentChannel.setError(error instanceof Error ? error.message : String(error));
-            await this.channelRepository.update(channelId, {
-              last_error: error instanceof Error ? error.message : String(error),
-              last_error_at: new Date(),
-            });
-          }
-        }
-      };
+      // With concat approach: No onFileEnd callback needed
+      // FFmpeg handles seamless transitions automatically through the concat file
+      // We track file progression and regenerate bumper when episodes start
       
-      // Start FFmpeg for single file with callback for when file finishes
-      // FFmpeg's discont_start flag automatically handles discontinuity tags at transitions
-      await this.ffmpegEngine.start(channelId, streamConfig, onFileEnd);
+      // CRITICAL: Check if FFmpeg is already active before starting
+      // If it is, stop it gracefully first to avoid the kill-and-restart pattern
+      if (this.ffmpegEngine.isActive(channelId)) {
+        logger.info(
+          { channelId, isTransition },
+          'FFmpeg is already active, stopping gracefully before starting new stream'
+        );
+        try {
+          await this.ffmpegEngine.stop(channelId);
+          // Small delay to ensure process fully terminates
+          await new Promise(resolve => setTimeout(resolve, 300));
+        } catch (error) {
+          logger.warn(
+            { channelId, error },
+            'Failed to stop existing FFmpeg process gracefully, will be killed by start()'
+          );
+        }
+      }
+      
+      // Start FFmpeg stream with concat file (no callback needed - concat handles transitions)
+      await this.ffmpegEngine.start(channelId, streamConfig);
+      
+      // Start file progression tracking for concat stream
+      // This tracks which file is currently playing and regenerates bumper when episodes start
+      // Pass seekToSeconds so the tracker accounts for starting mid-file
+      this.startConcatProgressionTracking(channelId, media, actualStartIndex, seekToSeconds, channel);
       
       logger.info(
         { channelId },
-        'FFmpeg started (discontinuity tags handled automatically by FFmpeg discont_start flag)'
+        'FFmpeg started'
       );
       
       logger.info(
         {
           channelId,
-          expectedSegments: expectedSegmentCount,
-          note: 'Segment numbering managed automatically by append_list flag'
+          concatFilePath,
+          mediaCount: media.length,
+          note: 'Streaming with concat file - FFmpeg handles seamless transitions automatically'
         },
-        'File streaming started'
+        'Channel streaming started with concat approach'
       );
 
 
-      // Transition to STREAMING
-      channel.transitionTo(ChannelState.STREAMING);
-      await this.channelRepository.update(channelId, {
-        state: ChannelState.STREAMING,
-        started_at: new Date(),
-      });
+      // Transition to STREAMING (only if not already in STREAMING)
+      // If channel is already streaming (e.g., duplicate start call or during transitions), just update timestamp
+      if (channel.getState() === ChannelState.STREAMING) {
+        // Already in STREAMING, just update timestamp
+        await this.channelRepository.update(channelId, {
+          started_at: new Date(),
+        });
+      } else {
+        // Normal start - transition to STREAMING
+        channel.transitionTo(ChannelState.STREAMING);
+        await this.channelRepository.update(channelId, {
+          state: ChannelState.STREAMING,
+          started_at: new Date(),
+        });
+      }
 
       // Create playback session
-      const virtualTimeState = await this.virtualTimeService.getChannelVirtualTime(channelId);
-      const virtualTimeAtStart = virtualTimeState?.totalVirtualSeconds || 0;
       const sessionType: import('../../infrastructure/database/repositories/PlaybackSessionRepository').SessionType =
-        shouldUseVirtualTime ? 'resumed' : 'started';
+        shouldUseScheduleTime ? 'resumed' : 'started';
 
       const sessionId = await this.playbackSessionRepository.create({
         channelId,
         sessionStart: new Date(),
-        virtualTimeAtStart,
         sessionType,
         triggeredBy: startIndex !== undefined ? 'manual' : 'automatic',
       });
@@ -1529,7 +1526,7 @@ export class ChannelService {
       this.activeSessionIds.set(channelId, sessionId);
 
       logger.info(
-        { channelId, sessionId, sessionType, virtualTimeAtStart },
+        { channelId, sessionId, sessionType },
         'Playback session started'
       );
 
@@ -1538,32 +1535,13 @@ export class ChannelService {
         'Channel started streaming'
       );
 
-      // Schedule bumper pre-generation for optimal timing (only if bumpers are enabled)
-      const includeBumpers = channel.config.includeBumpers !== false; // Default to true for backward compatibility
-      
-      if (includeBumpers) {
-        // Generate bumper 60 seconds before file ends (or immediately if file is short)
-        const bumperPregenDelay = Math.max(1000, (remainingDuration - 60) * 1000);
-        
-        logger.info(
-          { 
-            channelId, 
-            remainingDuration, 
-            bumperPregenDelaySeconds: Math.floor(bumperPregenDelay / 1000),
-            willPregenerateAt: new Date(Date.now() + bumperPregenDelay).toISOString()
-          },
-          'Scheduled bumper pre-generation'
-        );
-        
-        setTimeout(() => {
-          logger.info({ channelId }, 'Starting bumper pre-generation (60s before file end)');
-          this.preGenerateBumper(channelId, actualStartIndex).catch((err) => {
-            logger.warn({ error: err, channelId }, 'Bumper pre-generation failed (non-fatal)');
-          });
-        }, bumperPregenDelay);
-      } else {
-        logger.debug({ channelId }, 'Bumpers disabled, skipping bumper pre-generation');
-      }
+      // NOTE: With concat approach, bumper MP4 is already generated before concat file creation
+      // No need to pre-generate HLS segments - the concat file handles bumper playback seamlessly
+      // The bumper MP4 gets regenerated when episodes start via progression tracking
+      logger.debug(
+        { channelId, includeBumpers: channel.config.includeBumpers !== false },
+        'Bumper MP4 already generated before concat file creation (concat approach)'
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       channel.setError(errorMessage);
@@ -1578,6 +1556,211 @@ export class ChannelService {
   }
 
   /**
+   * Start file progression tracking for concat stream
+   * Tracks which file is currently playing and regenerates bumper when episodes start
+   */
+  private startConcatProgressionTracking(
+    channelId: string,
+    mediaFiles: MediaFile[],
+    startIndex: number,
+    seekToSeconds: number,
+    channel: Channel
+  ): void {
+    // Stop any existing tracker for this channel
+    this.stopConcatProgressionTracking(channelId);
+
+    const startTime = Date.now();
+    let currentFileIndex = startIndex;
+    
+    // Calculate total duration including bumpers (one bumper between each file)
+    const bumperDuration = channel.config.segmentDuration; // Bumper is one segment duration
+    
+    // Calculate accumulated time up to the start position
+    // This accounts for starting mid-playlist (e.g., starting at file 3, 30 seconds in)
+    let accumulatedStartTime = 0;
+    for (let i = 0; i < startIndex; i++) {
+      accumulatedStartTime += mediaFiles[i].metadata?.duration || 0;
+      if (i < mediaFiles.length - 1) {
+        accumulatedStartTime += bumperDuration;
+      }
+    }
+    // Add the seek position within the starting file
+    accumulatedStartTime += seekToSeconds;
+    
+    const totalDuration = mediaFiles.reduce((sum, file, index) => {
+      const fileDuration = file.metadata?.duration || 0;
+      // Add bumper after each file except the last
+      const bumper = index < mediaFiles.length - 1 ? bumperDuration : 0;
+      return sum + fileDuration + bumper;
+    }, 0);
+
+    logger.info(
+      {
+        channelId,
+        startIndex,
+        mediaCount: mediaFiles.length,
+        totalDuration,
+        bumperDuration
+      },
+      'Starting concat file progression tracking'
+    );
+
+    // Check progression every 5 seconds
+    const intervalId = setInterval(async () => {
+      try {
+        const channel = this.channels.get(channelId);
+        if (!channel || !channel.isStreaming()) {
+          this.stopConcatProgressionTracking(channelId);
+          return;
+        }
+
+        // Check for schedule block transition (dynamic playlists only)
+        // If a transition is detected, handle it and exit this tracker
+        // (handleScheduleBlockTransition will restart the channel with new media)
+        if (channel.config.useDynamicPlaylist) {
+          const hasTransitioned = await this.checkScheduleTransition(channelId);
+          if (hasTransitioned) {
+            // Schedule block changed - need to update concat file and restart
+            logger.info(
+              { channelId },
+              'Schedule transition detected in progression tracker - handling transition'
+            );
+            await this.handleScheduleBlockTransition(channelId);
+            return; // Exit - new tracker will be started after restart
+          }
+        }
+
+        const elapsedMs = Date.now() - startTime;
+        const elapsedSeconds = elapsedMs / 1000;
+        
+        // Calculate which file should be playing based on elapsed time
+        // Account for starting mid-playlist by adding accumulatedStartTime
+        const totalElapsedSeconds = accumulatedStartTime + elapsedSeconds;
+        
+        // Handle looping if we've exceeded total duration
+        const normalizedElapsed = totalElapsedSeconds % totalDuration;
+        
+        let accumulatedTime = 0;
+        let expectedFileIndex = 0;
+        
+        for (let i = 0; i < mediaFiles.length; i++) {
+          const fileDuration = mediaFiles[i].metadata?.duration || 0;
+          const bumper = i < mediaFiles.length - 1 ? bumperDuration : 0;
+          const segmentDuration = fileDuration + bumper;
+          
+          if (normalizedElapsed < accumulatedTime + segmentDuration) {
+            expectedFileIndex = i;
+            break;
+          }
+          
+          accumulatedTime += segmentDuration;
+        }
+
+        // If we've moved to a new file, update tracking and regenerate bumper
+        if (expectedFileIndex !== currentFileIndex) {
+          const oldIndex = currentFileIndex;
+          currentFileIndex = expectedFileIndex;
+          
+          logger.info(
+            {
+              channelId,
+              oldIndex,
+              newIndex: currentFileIndex,
+              currentFile: mediaFiles[currentFileIndex]?.filename,
+              elapsedSeconds
+            },
+            'File progression: moved to new file in concat stream'
+          );
+
+          // Update channel's currentIndex
+          channel.updateCurrentIndex(currentFileIndex);
+          await this.channelRepository.update(channelId, {
+            current_index: currentFileIndex,
+          });
+
+          // Update virtual time
+          let accumulatedSeconds = 0;
+          for (let i = 0; i < currentFileIndex; i++) {
+            accumulatedSeconds += mediaFiles[i].metadata?.duration || 0;
+            if (i < mediaFiles.length - 1) {
+              accumulatedSeconds += bumperDuration;
+            }
+          }
+        // NOTE: No longer advancing virtual time - position calculated on-demand from schedule_start_time
+
+          // Regenerate bumper for the NEXT file (when this one ends)
+          const nextFileIndex = (currentFileIndex + 1) % mediaFiles.length;
+          const nextFile = mediaFiles[nextFileIndex];
+          const includeBumpers = channel.config.includeBumpers !== false;
+          
+          if (nextFile && includeBumpers) {
+            // Resolve outputDir to absolute path to ensure bumper path is absolute
+            const outputDir = path.resolve(channel.config.outputDir);
+            const bumperPath = this.concatFileManager.getBumperPath(outputDir);
+            try {
+              await this.bumperGenerator.generateBumperMP4(
+                {
+                  showName: nextFile.info.showName,
+                  episodeName: nextFile.info.title || nextFile.getDisplayName(),
+                  duration: bumperDuration,
+                  resolution: channel.config.resolution,
+                  fps: channel.config.fps,
+                  videoBitrate: channel.config.videoBitrate,
+                  audioBitrate: channel.config.audioBitrate,
+                },
+                bumperPath
+              );
+              logger.info(
+                {
+                  channelId,
+                  currentFile: mediaFiles[currentFileIndex]?.filename,
+                  nextFile: nextFile.filename,
+                  bumperPath
+                },
+                'Regenerated bumper MP4 for next episode'
+              );
+            } catch (error) {
+              logger.warn(
+                { channelId, error, nextFile: nextFile.filename },
+                'Failed to regenerate bumper (non-fatal)'
+              );
+            }
+          }
+        }
+      } catch (error) {
+        logger.error(
+          { channelId, error },
+          'Error in concat progression tracking'
+        );
+      }
+    }, 5000); // Check every 5 seconds
+
+    // Store tracker
+    this.concatProgressionTrackers.set(channelId, {
+      startTime,
+      mediaFiles: [...mediaFiles], // Store copy
+      currentFileIndex,
+      intervalId
+    });
+  }
+
+  /**
+   * Stop file progression tracking for a channel
+   */
+  private stopConcatProgressionTracking(channelId: string): void {
+    const tracker = this.concatProgressionTrackers.get(channelId);
+    if (tracker) {
+      clearInterval(tracker.intervalId);
+      this.concatProgressionTrackers.delete(channelId);
+
+      // NOTE: Do NOT delete activeScheduleBlocks here - we need to preserve it across restarts
+      // to avoid false schedule transition detections. Only clear it when channel is fully stopped.
+
+      logger.debug({ channelId }, 'Stopped concat progression tracking');
+    }
+  }
+
+  /**
    * Stop streaming a channel
    */
   public async stopChannel(channelId: string): Promise<void> {
@@ -1587,6 +1770,20 @@ export class ChannelService {
       logger.warn({ channelId, state: channel.getState() }, 'Channel is not streaming');
       return;
     }
+
+    // Cancel early-start timer if it exists
+    const earlyStartTimer = this.earlyStartTimers.get(channelId);
+    if (earlyStartTimer) {
+      clearTimeout(earlyStartTimer);
+      this.earlyStartTimers.delete(channelId);
+      logger.debug({ channelId }, 'Cancelled early-start timer (channel stopping)');
+    }
+    
+    // Clear early start completion flag
+    this.earlyStartCompleted.delete(channelId);
+
+    // Stop concat progression tracking
+    this.stopConcatProgressionTracking(channelId);
 
     try {
       channel.transitionTo(ChannelState.STOPPING);
@@ -1609,18 +1806,14 @@ export class ChannelService {
       const sessionId = this.activeSessionIds.get(channelId);
       if (sessionId) {
         try {
-          const virtualTimeState = await this.virtualTimeService.getChannelVirtualTime(channelId);
-          const virtualTimeAtEnd = virtualTimeState?.totalVirtualSeconds || 0;
-
           await this.playbackSessionRepository.endSession(sessionId, {
             sessionEnd: new Date(),
-            virtualTimeAtEnd,
           });
 
           this.activeSessionIds.delete(channelId);
 
           logger.info(
-            { channelId, sessionId, virtualTimeAtEnd },
+            { channelId, sessionId },
             'Playback session ended'
           );
         } catch (sessionError) {
@@ -1634,29 +1827,11 @@ export class ChannelService {
         started_at: null,
       });
 
-      // Pause virtual time if no viewers - CRITICAL for virtual time progression
-      const viewerCount = channel.getMetadata().viewerCount;
-      if (viewerCount === 0) {
-        try {
-          logger.info(
-            { channelId, viewerCount },
-            'Pausing virtual time (no viewers)'
-          );
-          const media = await this.getChannelMedia(channelId);
-          await this.virtualTimeService.pauseVirtualTime(channelId, media);
-        } catch (pauseError) {
-          logger.error(
-            { error: pauseError, channelId },
-            'CRITICAL: Failed to pause virtual time - this will break virtual time progression!'
-          );
-          // Don't throw - we still want to mark channel as stopped
-        }
-      } else {
-        logger.debug(
-          { channelId, viewerCount },
-          'Not pausing virtual time (viewers still present)'
-        );
-      }
+      // Clean up schedule block tracking for dynamic playlists (only when fully stopped)
+      this.activeScheduleBlocks.delete(channelId);
+
+      // NOTE: No longer need to pause/track virtual time with schedule-based approach
+      // Position is calculated on-demand from schedule_start_time when channel resumes
 
       logger.info({ channelId }, 'Channel stopped');
     } catch (error) {
@@ -1668,22 +1843,8 @@ export class ChannelService {
         last_error_at: new Date(),
       });
       
-      // CRITICAL: Even if stop failed, pause virtual time if no viewers
-      // This ensures virtual time progression is preserved even on errors
-      try {
-        const viewerCount = channel.getMetadata().viewerCount;
-        if (viewerCount === 0) {
-          logger.info(
-            { channelId, viewerCount },
-            'Pausing virtual time after stop error (no viewers)'
-          );
-          const media = await this.getChannelMedia(channelId);
-          await this.virtualTimeService.pauseVirtualTime(channelId, media);
-        }
-      } catch (pauseError) {
-        logger.error({ error: pauseError, channelId }, 'Failed to pause virtual time after stop error');
-      }
-      
+      // NOTE: No longer need to pause virtual time on error with schedule-based approach
+
       logger.error({ error, channelId }, 'Failed to stop channel');
       throw error;
     }
@@ -1700,6 +1861,160 @@ export class ChannelService {
     await this.startChannel(channelId, currentIndex);
 
     logger.info({ channelId }, 'Channel restarted');
+  }
+
+  /**
+   * Check if schedule block has transitioned for a dynamic playlist channel
+   *
+   * @param channelId - Channel ID
+   * @returns True if schedule block has changed, false otherwise
+   */
+  private async checkScheduleTransition(channelId: string): Promise<boolean> {
+    const channel = this.channels.get(channelId);
+    if (!channel?.config.useDynamicPlaylist) {
+      return false; // Static playlists don't have schedule transitions
+    }
+
+    // Check if we have a playlist resolver (needed for dynamic playlists)
+    if (!this.playlistResolver) {
+      logger.warn({ channelId }, 'No playlist resolver available for schedule transition check');
+      return false;
+    }
+
+    try {
+      // Get the current schedule block from the database
+      const currentBlock = await this.playlistResolver.scheduleRepository?.getActiveBlock(
+        channelId,
+        new Date()
+      );
+
+      // Get the tracked schedule block ID from our Map
+      const trackedBlockId = this.activeScheduleBlocks.get(channelId);
+
+      // If we have a current block and it's different from tracked, transition has occurred
+      if (currentBlock?.id && currentBlock.id !== trackedBlockId) {
+        logger.info(
+          {
+            channelId,
+            oldBlock: trackedBlockId || 'none',
+            newBlock: currentBlock.id,
+            newBlockName: currentBlock.name,
+            playbackMode: currentBlock.playback_mode
+          },
+          'Schedule block transition detected'
+        );
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      logger.error({ error, channelId }, 'Error checking schedule transition');
+      return false;
+    }
+  }
+
+  /**
+   * Handle schedule block transition for a dynamic playlist channel
+   * This updates the concat file with new media list and restarts the stream
+   *
+   * @param channelId - Channel ID
+   */
+  private async handleScheduleBlockTransition(channelId: string): Promise<void> {
+    const channel = this.channels.get(channelId);
+    if (!channel) {
+      logger.error({ channelId }, 'Channel not found for schedule transition');
+      return;
+    }
+
+    logger.info(
+      { channelId, channelName: channel.config.name },
+      'Handling schedule block transition for concat stream'
+    );
+
+    try {
+      // Get new media list (will be shuffled/ordered based on new block's playback_mode)
+      const newMedia = await this.getChannelMedia(channelId);
+
+      if (newMedia.length === 0) {
+        logger.error({ channelId }, 'No media found for new schedule block');
+        return;
+      }
+
+      // Get the new schedule block to track it
+      const newBlock = await this.playlistResolver?.scheduleRepository?.getActiveBlock(
+        channelId,
+        new Date()
+      );
+
+      if (newBlock) {
+        // Update tracked schedule block ID
+        this.activeScheduleBlocks.set(channelId, newBlock.id);
+
+        logger.info(
+          {
+            channelId,
+            newBlockId: newBlock.id,
+            newBlockName: newBlock.name,
+            newMediaCount: newMedia.length,
+            playbackMode: newBlock.playback_mode
+          },
+          'Updating concat file with new schedule block media'
+        );
+
+        // Recreate concat file with new media list
+        const outputDir = path.resolve(channel.config.outputDir);
+        const mediaFilePaths = newMedia.map(m => m.path);
+        const bumperPath = this.concatFileManager.getBumperPath(outputDir);
+
+        await this.concatFileManager.updateConcatFile(
+          channelId,
+          outputDir,
+          mediaFilePaths,
+          bumperPath,
+          newBlock.id // Track the new schedule block ID
+        );
+
+        // Get EPG-calculated position to maintain schedule accuracy
+        // This ensures we resume at the correct file/time for the new schedule block
+        let resumeIndex = 0;
+        try {
+          const epgPosition = await this.epgService.getCurrentPlaybackPosition(channel, newMedia);
+          if (epgPosition) {
+            resumeIndex = epgPosition.fileIndex;
+            logger.info(
+              {
+                channelId,
+                epgFileIndex: epgPosition.fileIndex,
+                epgSeekPosition: epgPosition.seekPosition,
+                newBlockName: newBlock.name
+              },
+              'Using EPG-calculated position for schedule transition restart'
+            );
+          }
+        } catch (error) {
+          logger.warn(
+            { channelId, error },
+            'Failed to get EPG position for schedule transition, starting from index 0'
+          );
+        }
+
+        // Restart stream gracefully with new concat file at EPG-calculated position
+        logger.info(
+          { channelId, resumeIndex, newBlockName: newBlock.name },
+          'Restarting stream with new schedule block media'
+        );
+        await this.stopChannel(channelId);
+        await this.startChannel(channelId, resumeIndex); // Use EPG-calculated position
+
+        logger.info(
+          { channelId, newBlockName: newBlock.name },
+          'Schedule block transition completed successfully'
+        );
+      }
+    } catch (error) {
+      logger.error({ error, channelId }, 'Failed to handle schedule block transition');
+      // Don't throw - let the stream continue with current media
+    }
   }
 
 
@@ -1996,8 +2311,8 @@ export class ChannelService {
       playlist += `${localPlaceholderName}\n`;
     }
 
-    // Mark discontinuity for when FFmpeg's real segments appear
-    playlist += `#EXT-X-DISCONTINUITY\n`;
+    // No discontinuity tag needed - all files are re-encoded to identical parameters
+    // FFmpeg will replace placeholders with real segments seamlessly
 
     await fs.writeFile(playlistPath, playlist);
     
@@ -2006,6 +2321,11 @@ export class ChannelService {
 
   /**
    * UNUSED with append_list approach - kept for reference
+   * 
+   * NOTE: This function should NEVER be used with append_list!
+   * append_list REQUIRES the playlist to exist - deleting it breaks FFmpeg's segment numbering.
+   * FFmpeg's delete_segments flag automatically handles old segment cleanup.
+   * 
    * Clean up ALL old segments and playlist before starting a new file
    * This prevents old bumper/file segments from interfering with buffer detection
    *
@@ -2029,6 +2349,7 @@ export class ChannelService {
         }
       }
 
+      // WARNING: Deleting playlist breaks append_list - DO NOT USE THIS WITH append_list!
       // Delete old playlist file
       const playlistPath = path.join(outputDir, 'stream.m3u8');
       try {
@@ -2204,182 +2525,19 @@ export class ChannelService {
    * @param firstNewSegmentNumber - Segment number where new file starts
    */
   // @ts-ignore - Intentionally unused, kept for reference
+  // NOTE: This method is UNUSED - we don't inject discontinuity tags because:
+  // 1. All files are re-encoded to identical parameters (no encoding changes)
+  // 2. discont_start flag doesn't work with append_list
+  // 3. Discontinuity tags are removed on-read in PlaylistService
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private async _injectDiscontinuityTag_unused(
-    channelId: string,
-    firstNewSegmentNumber: number
+    _channelId: string,
+    _firstNewSegmentNumber: number
   ): Promise<void> {
-    // Check if discontinuity tracking is enabled
-    if (!config.hls.insertDiscontinuityTags) {
-      logger.debug({ channelId }, 'Discontinuity tag insertion disabled in config');
-      return;
-    }
-
-    try {
-      const channel = await this.getChannel(channelId);
-      const playlistPath = path.join(channel.config.outputDir, 'stream.m3u8');
-
-      // Check if playlist exists
-      const playlistExists = await fs.access(playlistPath).then(() => true).catch(() => false);
-      if (!playlistExists) {
-        logger.warn(
-          { channelId, playlistPath },
-          'Cannot inject discontinuity tag - playlist does not exist'
-        );
-        return;
-      }
-
-      // Read current playlist
-      let playlistContent = await fs.readFile(playlistPath, 'utf-8');
-
-      // Get or initialize discontinuity count for this channel
-      const currentDiscCount = this.channelDiscontinuityCount.get(channelId) || 0;
-      const newDiscCount = currentDiscCount + 1;
-
-      // Inject discontinuity tag before the first segment of new file
-      playlistContent = this.playlistManipulator.insertDiscontinuityBeforeSegment(
-        playlistContent,
-        firstNewSegmentNumber
-      );
-
-      // Add discontinuity sequence tag if tracking is enabled
-      if (config.hls.discontinuityTracking) {
-        playlistContent = this.playlistManipulator.addDiscontinuitySequence(
-          playlistContent,
-          newDiscCount
-        );
-      }
-
-      // Write modified playlist back
-      await fs.writeFile(playlistPath, playlistContent);
-
-      // Update discontinuity count
-      this.channelDiscontinuityCount.set(channelId, newDiscCount);
-
-      logger.info(
-        {
-          channelId,
-          firstNewSegmentNumber,
-          discontinuitySequence: newDiscCount,
-        },
-        'Injected EXT-X-DISCONTINUITY tag at file transition (RFC 8216 compliance)'
-      );
-
-      // Validate the result
-      const validation = this.playlistManipulator.validateDiscontinuityTags(playlistContent);
-      if (!validation.valid) {
-        logger.warn(
-          {
-            channelId,
-            issues: validation.issues,
-            suggestions: validation.suggestions,
-          },
-          'Playlist discontinuity validation found issues'
-        );
-      }
-    } catch (error) {
-      logger.error(
-        { error, channelId, firstNewSegmentNumber },
-        'Failed to inject discontinuity tag (non-fatal)'
-      );
-    }
-  }
-
-  /**
-   * Pre-generate bumper for next file in background
-   * Generates both MP4 and HLS segments for fast transition
-   * @param channelId - Channel ID
-   * @param currentFileIndex - Optional: current file index (overrides DB value). Use this when calling after startChannel to avoid stale DB index.
-   */
-  private async preGenerateBumper(channelId: string, currentFileIndex?: number): Promise<void> {
-    try {
-      const channel = await this.getChannel(channelId);
-      const media = await this.getChannelMedia(channelId);
-
-      if (media.length === 0) return;
-
-      // Use provided index if available (more reliable after restart), otherwise fall back to DB
-      const currentIndex = currentFileIndex !== undefined ? currentFileIndex : channel.getMetadata().currentIndex;
-      const nextIndex = (currentIndex + 1) % media.length;
-      const nextFile = media[nextIndex];
-
-      logger.info(
-        { channelId, nextFile: nextFile.filename, currentIndex, nextIndex },
-        'Pre-generating bumper for next file'
-      );
-
-      // Always clear any existing cached bumper for this index
-      // Don't cache bumpers - always regenerate fresh to avoid stale directory references
-      const pregenForChannel = this.channelPregenBumpers.get(channelId);
-      if (pregenForChannel?.has(nextIndex)) {
-        const existingForIndex = pregenForChannel.get(nextIndex);
-        logger.debug({ channelId, nextIndex, oldDir: existingForIndex?.segmentsDir }, 'Clearing cached bumper entry (will regenerate fresh)');
-        pregenForChannel.delete(nextIndex);
-
-        // Clean up old directory if it exists
-        if (existingForIndex?.segmentsDir) {
-          setTimeout(async () => {
-            try {
-              await fs.rm(existingForIndex.segmentsDir, { recursive: true, force: true });
-              logger.debug({ channelId, segmentsDir: existingForIndex.segmentsDir }, 'Cleaned up old pre-generated bumper directory');
-            } catch {}
-          }, 100);
-        }
-      }
-
-      // Generate HLS segments directly (no intermediate MP4)
-      const generationStartTime = Date.now();
-      this.bumperGenerator.generateUpNextBumperSegments({
-        showName: nextFile.info.showName,
-        episodeName: nextFile.info.title || nextFile.getDisplayName(),
-        duration: 10, // 10 second bumper (gives FFmpeg time to generate next file's segments)
-        resolution: channel.config.resolution,
-        fps: channel.config.fps,
-        videoBitrate: channel.config.videoBitrate,
-        audioBitrate: channel.config.audioBitrate,
-      }).then(({ segmentsDir, segmentCount }) => {
-        // Store bumper segments info for the specific target index
-        let map = this.channelPregenBumpers.get(channelId);
-        if (!map) {
-          map = new Map();
-          this.channelPregenBumpers.set(channelId, map);
-        }
-        map.set(nextIndex, { segmentsDir, segmentCount });
-        const generationTime = Date.now() - generationStartTime;
-        logger.info(
-          { 
-            channelId, 
-            segmentsDir, 
-            segmentCount, 
-            nextFile: nextFile.filename,
-            generationTimeMs: generationTime,
-            nextIndex 
-          },
-          'Bumper segments pre-generated successfully'
-        );
-      }).catch((error) => {
-        const generationTime = Date.now() - generationStartTime;
-        logger.error({ 
-          error, 
-          channelId, 
-          nextFile: nextFile.filename,
-          generationTimeMs: generationTime,
-          nextIndex,
-          stack: error instanceof Error ? error.stack : undefined
-        }, 'Failed to pre-generate bumper segments (non-fatal)');
-        // Remove partial bumper info if it exists
-        // If a partial entry exists for this index, remove it
-        const map = this.channelPregenBumpers.get(channelId);
-        if (map && map.has(nextIndex)) {
-          const info = map.get(nextIndex)!;
-          if (!info.segmentsDir || !info.segmentCount) {
-            map.delete(nextIndex);
-          }
-        }
-      });
-    } catch (error) {
-      logger.error({ error, channelId }, 'Failed to pre-generate bumper (non-fatal)');
-      // Don't throw - bumper generation failure shouldn't stop streaming
-    }
+    // UNUSED - kept for reference only
+    // This method would inject discontinuity tags, but we don't need them
+    // since all segments have identical encoding parameters after re-encoding
+    return;
   }
 
   /**
@@ -2468,31 +2626,36 @@ export class ChannelService {
 
     // If this is the first viewer and channel is not streaming, start streaming
     // This handles both: (1) resuming after pause (uses EPG to determine unpause position), and (2) starting fresh on demand
-    if (newCount === 1 && !channel.isStreaming()) {
-      const virtualTime = await this.virtualTimeService.getChannelVirtualTime(channelId);
-      const isResuming = virtualTime?.virtualPausedAt !== null;
+    // CRITICAL: Also check if FFmpeg is already active to avoid double-start race condition
+    // (e.g., if admin panel start was clicked just before viewer connected)
+    const isStreaming = channel.isStreaming();
+    const isFFmpegActive = this.ffmpegEngine.isActive(channelId);
+    const isStarting = channel.getState() === ChannelState.STARTING;
+    
+    if (newCount === 1 && !isStreaming && !isFFmpegActive && !isStarting) {
+      const hasScheduleTime = await this.scheduleTimeService.hasScheduleTime(channelId);
+      const isResuming = hasScheduleTime; // Channel resuming if schedule time exists
       logger.info(
         { 
           channelId, 
           isResuming,
-          willUseEPG: isResuming || channel.isIdle()
+          willUseEPG: isResuming || channel.isIdle(),
+          channelState: channel.getState(),
+          ffmpegActive: isFFmpegActive
         }, 
         `First viewer connected, ${isResuming ? 'unpausing stream' : 'starting stream'} (will use EPG to determine position if available)`
       );
 
       // Initialize or check virtual time state
-      if (!virtualTime || !virtualTime.virtualStartTime) {
+      if (!hasScheduleTime) {
         // Initialize virtual timeline for new channel
-        await this.virtualTimeService.initializeVirtualTimeline(channelId);
+        await this.scheduleTimeService.initializeScheduleTime(channelId);
       }
       
       logger.debug(
         {
           channelId,
-          hasVirtualTime: !!virtualTime,
-          virtualStartTime: virtualTime?.virtualStartTime?.toISOString(),
-          virtualPausedAt: virtualTime?.virtualPausedAt?.toISOString(),
-          totalVirtualSeconds: virtualTime?.totalVirtualSeconds,
+          hasVirtualTime: !!channelId,
           isResuming: isResuming,
         },
         'Virtual time state before unpausing (startChannel will use EPG to determine position)'
@@ -2502,6 +2665,16 @@ export class ChannelService {
 
       // Start streaming from virtual position
       await this.startChannel(channelId);
+    } else if (newCount === 1 && (isFFmpegActive || isStarting)) {
+      logger.debug(
+        {
+          channelId,
+          channelState: channel.getState(),
+          ffmpegActive: isFFmpegActive,
+          isStarting,
+        },
+        'First viewer connected but stream is already starting/active, skipping startChannel call'
+      );
     }
   }
 
@@ -2544,19 +2717,11 @@ export class ChannelService {
 
             // Pause virtual time BEFORE stopping - this ensures it happens even if stopChannel fails
             // This is the critical hook for virtual time progression
-            try {
-              logger.info(
-                { channelId },
-                'Pausing virtual time (grace period expired, no viewers)'
-              );
-              const media = await this.getChannelMedia(channelId);
-              await this.virtualTimeService.pauseVirtualTime(channelId, media);
-            } catch (pauseError) {
-              logger.error(
-                { error: pauseError, channelId },
-                'CRITICAL: Failed to pause virtual time during grace period pause'
-              );
-            }
+            // NOTE: No longer need to pause virtual time with schedule-based approach
+            logger.info(
+              { channelId },
+              'Grace period expired, stopping channel (no viewers)'
+            );
 
             // Stop streaming (FFmpeg errors during stop are expected)
             await this.stopChannel(channelId);
@@ -2623,16 +2788,187 @@ export class ChannelService {
   }
 
   /**
+   * Start the next file 6 seconds before current file ends
+   * This ensures segments are ready when the current stream ends, eliminating gaps
+   */
+  private async startNextFileEarly(
+    channelId: string,
+    currentIndex: number
+  ): Promise<void> {
+    try {
+      const channel = this.channels.get(channelId);
+      if (!channel) {
+        logger.warn({ channelId }, 'Channel no longer exists, skipping early start');
+        return;
+      }
+
+      // Only proceed if channel is still streaming
+      if (!channel.isStreaming() || channel.getState() !== ChannelState.STREAMING) {
+        logger.debug({ channelId, state: channel.getState() }, 'Channel not streaming, skipping early start');
+        return;
+      }
+
+      // Get fresh media list (may have changed for dynamic playlists)
+      const media = await this.getChannelMedia(channelId);
+      if (media.length === 0) {
+        logger.warn({ channelId }, 'No media files available for early start');
+        return;
+      }
+
+      // Detect if media list changed (schedule block transition)
+      const previousMedia = channel.config.useDynamicPlaylist 
+        ? (this.channelMedia.get(channelId) || [])
+        : [];
+      const mediaListChanged = channel.config.useDynamicPlaylist && (
+        media.length !== previousMedia.length ||
+        media.some((m, i) => !previousMedia[i] || m.id !== previousMedia[i].id)
+      );
+
+      let nextIndex: number;
+
+      // EPG as single source of truth - try EPG first
+      try {
+        const epgFileIndex = await this.epgService.getCurrentFileIndexFromEPG(channel, media);
+
+        if (epgFileIndex !== null) {
+          nextIndex = epgFileIndex;
+          logger.info(
+            {
+              channelId,
+              currentIndex,
+              nextIndex,
+              nextFile: media[nextIndex]?.filename,
+              source: 'EPG',
+              mediaListChanged,
+            },
+            'Early start: next file determined by EPG'
+          );
+        } else {
+          throw new Error('EPG unavailable, using fallback logic');
+        }
+      } catch (epgError) {
+        // EPG failed or unavailable - use fallback logic
+        if (mediaListChanged) {
+          nextIndex = 0;
+          logger.info(
+            {
+              channelId,
+              nextIndex,
+              nextFile: media[0]?.filename,
+              reason: 'schedule block changed',
+            },
+            'Early start: schedule block changed, starting from beginning'
+          );
+        } else {
+          const currentViewerCount = channel.getMetadata().viewerCount;
+          
+          if (currentViewerCount > 0) {
+            // Active streaming - go to next file in sequence
+            nextIndex = (currentIndex + 1) % media.length;
+            logger.info(
+              {
+                channelId,
+                currentIndex,
+                nextIndex,
+                nextFile: media[nextIndex]?.filename,
+                fallback: 'sequential (active streaming)',
+              },
+              'Early start: next file (EPG unavailable, using sequential fallback)'
+            );
+          } else {
+            // No viewers - use virtual time
+            const hasScheduleTime = await this.scheduleTimeService.hasScheduleTime(channelId);
+            if (!hasScheduleTime) {
+              nextIndex = (currentIndex + 1) % media.length;
+              logger.info(
+                {
+                  channelId,
+                  currentIndex,
+                  nextIndex,
+                  nextFile: media[nextIndex]?.filename,
+                  fallback: 'sequential (no virtual time)',
+                },
+                'Early start: next file (EPG unavailable, no virtual time)'
+              );
+            } else {
+              const position = await this.scheduleTimeService.getCurrentPosition(
+                channelId,
+                media
+              );
+
+              if (position && position.fileIndex === currentIndex) {
+                nextIndex = (currentIndex + 1) % media.length;
+              } else if (position) {
+                nextIndex = position.fileIndex;
+              } else {
+                nextIndex = (currentIndex + 1) % media.length;
+              }
+              
+              logger.info(
+                {
+                  channelId,
+                  currentIndex,
+                  nextIndex,
+                  nextFile: media[nextIndex]?.filename,
+                  fallback: 'virtual time',
+                },
+                'Early start: next file (EPG unavailable, using virtual time)'
+              );
+            }
+          }
+        }
+      }
+
+      // Validate nextIndex
+      if (nextIndex < 0 || nextIndex >= media.length) {
+        logger.warn({ channelId, nextIndex, mediaCount: media.length }, 'Next index out of bounds, resetting to 0');
+        nextIndex = 0;
+      }
+
+      const nextFile = media[nextIndex];
+      if (!nextFile) {
+        logger.error({ channelId, nextIndex, mediaCount: media.length }, 'Next file not found, cannot start early');
+        return;
+      }
+
+      logger.info(
+        {
+          channelId,
+          currentIndex,
+          nextIndex,
+          nextFile: nextFile.filename,
+          note: 'Starting next file 7 seconds early (6s target + 1s buffer) to ensure seamless transition',
+        },
+        'Early start: starting next file before current file ends'
+      );
+
+      // Start the next file with isTransition=true
+      // This bypasses state checks and lets EPG determine the correct position
+      // Note: This will kill the current FFmpeg process, which is intentional
+      // The current file has ~7 seconds left, and the next file will start writing segments immediately
+      await this.startChannel(channelId, undefined, true); // isTransition = true
+
+      logger.info(
+        { 
+          channelId, 
+          nextFile: nextFile.filename,
+          note: 'Early start completed - next file is now streaming, current file will be cut short by ~16 seconds'
+        }, 
+        'Early start completed - next file is now streaming'
+      );
+    } catch (error) {
+      logger.error({ error, channelId }, 'Failed to start next file early (non-fatal, onFileEnd will handle transition)');
+      // Don't throw - onFileEnd will handle the transition normally if early start fails
+    }
+  }
+
+  /**
    * Cleanup all channels on shutdown
    */
   public async cleanup(): Promise<void> {
     logger.info('Cleaning up all channels');
 
     // Stop virtual time update loop
-    if (this.virtualTimeUpdateInterval) {
-      clearInterval(this.virtualTimeUpdateInterval);
-      this.virtualTimeUpdateInterval = null;
-    }
 
     // Clear all pending pause timers
     for (const [channelId, timer] of this.pauseTimers.entries()) {
@@ -2640,6 +2976,13 @@ export class ChannelService {
       logger.debug({ channelId }, 'Cleared pending pause timer during cleanup');
     }
     this.pauseTimers.clear();
+
+    // Clear all pending early-start timers
+    for (const [channelId, timer] of this.earlyStartTimers.entries()) {
+      clearTimeout(timer);
+      logger.debug({ channelId }, 'Cleared pending early-start timer during cleanup');
+    }
+    this.earlyStartTimers.clear();
 
     const streamingChannels = this.getAllChannels().filter((ch) => ch.isStreaming());
 

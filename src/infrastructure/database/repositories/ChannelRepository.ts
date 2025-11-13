@@ -55,14 +55,15 @@ export class ChannelRepository {
    */
   public async create(channel: Channel): Promise<void> {
     const config = channel.config;
+    const now = new Date(); // Use current time for schedule_start_time when creating channel
     await Database.query(
       `INSERT INTO channels (
         id, name, slug, output_dir, video_bitrate, audio_bitrate,
         resolution, fps, segment_duration, auto_start, use_dynamic_playlist, include_bumpers, state,
         current_index, viewer_count, virtual_start_time,
-        total_virtual_seconds, virtual_current_index, virtual_position_in_file
+        total_virtual_seconds, virtual_current_index, virtual_position_in_file, schedule_start_time
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
       )`,
       [
         channel.id,
@@ -84,6 +85,7 @@ export class ChannelRepository {
         channel.getMetadata().accumulatedTime || 0, // total_virtual_seconds
         0, // virtual_current_index
         0, // virtual_position_in_file
+        now, // schedule_start_time - set to current time when channel is created
       ]
     );
   }

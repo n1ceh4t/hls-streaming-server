@@ -194,7 +194,7 @@ describe('FFmpegEngine', () => {
       expect(allOptions).toContain(`-hls_time ${config.segmentDuration}`);
       expect(allOptions).toContain('-hls_list_size');
       expect(allOptions.join(' ')).toContain('append_list');
-      expect(allOptions.join(' ')).toContain('discont_start');
+      // discont_start removed - doesn't work with append_list, and not needed since we re-encode to identical parameters
     });
 
     it('should add video filter for scaling', async () => {

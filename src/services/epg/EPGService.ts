@@ -3,7 +3,7 @@ import { Channel } from '../../domain/channel/Channel';
 import { MediaFile } from '../../domain/media/MediaFile';
 import { createLogger } from '../../utils/logger';
 import { EPGCacheRepository } from '../../infrastructure/database/repositories/EPGCacheRepository';
-import { VirtualTimeService } from '../virtual-time/VirtualTimeService';
+import { ScheduleTimeService } from '../schedule-time/ScheduleTimeService';
 import { ScheduleRepository } from '../../infrastructure/database/repositories/ScheduleRepository';
 import { MediaBucketService } from '../bucket/MediaBucketService';
 import { MediaFileRepository } from '../../infrastructure/database/repositories/MediaFileRepository';
@@ -27,24 +27,24 @@ export class EPGService {
   private readonly cacheMinutes: number;
   private readonly enableDatabaseCache: boolean;
   private readonly epgCacheRepository: EPGCacheRepository;
-  private readonly virtualTimeService: VirtualTimeService;
+  private readonly scheduleTimeService: ScheduleTimeService;
   private readonly scheduleRepository: ScheduleRepository;
   private readonly mediaFileRepository: MediaFileRepository;
   private readonly bucketService?: MediaBucketService;
   private readonly playlistResolver?: PlaylistResolver;
-  private readonly metadataExtractor?: MetadataExtractor;
+  // NOTE: metadataExtractor removed - we now rely on database-cached metadata only
 
   constructor(options: EPGOptions = {}) {
     this.lookaheadHours = options.lookaheadHours || 48;
     this.cacheMinutes = options.cacheMinutes || 5; // In-memory cache: 5 minutes
     this.enableDatabaseCache = options.enableDatabaseCache !== false; // Default: true
     this.epgCacheRepository = new EPGCacheRepository();
-    this.virtualTimeService = new VirtualTimeService();
+    this.scheduleTimeService = new ScheduleTimeService();
     this.scheduleRepository = new ScheduleRepository();
     this.mediaFileRepository = new MediaFileRepository();
     this.bucketService = options.bucketService;
     this.playlistResolver = options.playlistResolver;
-    this.metadataExtractor = options.metadataExtractor;
+    // NOTE: metadataExtractor no longer used - removed to rely on database-cached metadata
   }
 
   /**
@@ -110,48 +110,45 @@ export class EPGService {
       logger.debug({ channelId: channel.id }, 'No initial media for dynamic playlist, but will check schedule blocks during EPG generation');
     }
 
-    // Get virtual time state for the channel
-    const virtualTime = await this.virtualTimeService.getChannelVirtualTime(channel.id);
+    // Get schedule time for the channel
+    const schedulePosition = await this.scheduleTimeService.getCurrentPosition(
+      channel.id,
+      mediaFiles,
+      roundedStartTime
+    );
 
     let fileIndex: number;
     let positionInFile: number;
 
-    if (virtualTime && virtualTime.virtualStartTime) {
-      // Channel has virtual timeline - calculate current position
-      const virtualPosition = this.virtualTimeService.calculateCurrentVirtualPosition(
-        virtualTime,
-        mediaFiles,
-        roundedStartTime
-      );
-
-      fileIndex = virtualPosition.currentIndex;
-      positionInFile = virtualPosition.positionInFile;
+    if (schedulePosition) {
+      // Channel has schedule time - use calculated position
+      fileIndex = schedulePosition.fileIndex;
+      positionInFile = schedulePosition.seekPosition;
 
       logger.debug(
         {
           channelId: channel.id,
-          virtualStartTime: virtualTime.virtualStartTime,
-          totalVirtualSeconds: virtualPosition.totalVirtualSeconds,
+          elapsedSeconds: schedulePosition.elapsedSeconds,
           fileIndex,
           positionInFile
         },
-        'Using virtual time for EPG generation'
+        'Using schedule time for EPG generation'
       );
     } else {
-      // No virtual timeline - use sequential position from channel metadata
+      // No schedule time - use channel metadata position or start from beginning
       fileIndex = channel.getMetadata().currentIndex || 0;
       positionInFile = 0;
 
       logger.debug(
         { channelId: channel.id, fileIndex },
-        'No virtual timeline - using sequential position'
+        'No schedule time - using channel index or starting from beginning'
       );
     }
 
     const endTime = new Date(roundedStartTime.getTime() + this.lookaheadHours * 60 * 60 * 1000);
 
     // Check if channel uses dynamic playlists - if so, use PlaylistResolver for consistency
-    logger.info(
+    logger.debug(
       {
         channelId: channel.id,
         useDynamicPlaylist: channel.config.useDynamicPlaylist,
@@ -166,7 +163,7 @@ export class EPGService {
 
     let programs: Program[];
     if (channel.config.useDynamicPlaylist && this.playlistResolver) {
-      logger.info(
+      logger.debug(
         {
           channelId: channel.id,
           method: 'PlaylistResolver',
@@ -174,7 +171,7 @@ export class EPGService {
         'EPG generatePrograms: Using PlaylistResolver for dynamic playlist (consistent with streaming)'
       );
       programs = await this.generateProgramsForDynamicPlaylistWithResolver(channel, roundedStartTime, endTime, fileIndex, positionInFile);
-      logger.info(
+      logger.debug(
         {
           channelId: channel.id,
           programCount: programs.length,
@@ -193,7 +190,7 @@ export class EPGService {
         'EPG generatePrograms: Using legacy method for dynamic playlist'
       );
       programs = await this.generateProgramsForDynamicPlaylist(channel, mediaFiles, roundedStartTime, endTime, fileIndex, positionInFile);
-      logger.info(
+      logger.debug(
         {
           channelId: channel.id,
           programCount: programs.length,
@@ -203,7 +200,7 @@ export class EPGService {
       );
     } else {
       // Static playlist generation (original logic)
-      logger.info(
+      logger.debug(
         {
           channelId: channel.id,
           method: 'Static',
@@ -212,7 +209,7 @@ export class EPGService {
         'EPG generatePrograms: Using static playlist generation'
       );
       programs = await this.generateProgramsForStaticPlaylist(channel, mediaFiles, roundedStartTime, endTime, fileIndex, positionInFile);
-      logger.info(
+      logger.debug(
         {
           channelId: channel.id,
           programCount: programs.length,
@@ -386,64 +383,25 @@ export class EPGService {
     let fileIndex = initialFileIndex;
     let positionInFile = initialPositionInFile;
     
-    // If we have initial media and virtual time, recalculate the correct starting position
-    // based on elapsed time from virtual start, using the ACTUAL media list
+    // If we have initial media and schedule time, recalculate the correct starting position
+    // based on elapsed time from schedule start, using the ACTUAL media list
     if (initialMediaFiles.length > 0) {
-      const virtualTime = await this.virtualTimeService.getChannelVirtualTime(channel.id);
-      if (virtualTime && virtualTime.virtualStartTime) {
-        // Calculate elapsed seconds from virtual start to EPG start time
-        const elapsedFromVirtualStart = (startTime.getTime() - virtualTime.virtualStartTime.getTime()) / 1000;
-        
-        // Calculate which file we're on based on elapsed time, using the actual media list
-        let accumulatedSeconds = 0;
-        let targetFileIndex = 0;
-        let targetPositionInFile = 0;
-        
-        // Account for negative elapsed time (EPG start is before virtual start)
-        const effectiveElapsed = Math.max(0, elapsedFromVirtualStart);
-        
-        for (let i = 0; i < initialMediaFiles.length; i++) {
-          const fileDuration = initialMediaFiles[i].metadata.duration;
-          if (effectiveElapsed < accumulatedSeconds + fileDuration) {
-            targetFileIndex = i;
-            targetPositionInFile = effectiveElapsed - accumulatedSeconds;
-            break;
-          }
-          accumulatedSeconds += fileDuration;
-          
-          // Handle wraparound
-          if (i === initialMediaFiles.length - 1) {
-            const totalDuration = accumulatedSeconds;
-            const remainingSeconds = effectiveElapsed % totalDuration;
-            
-            accumulatedSeconds = 0;
-            for (let j = 0; j < initialMediaFiles.length; j++) {
-              const fd = initialMediaFiles[j].metadata.duration;
-              if (remainingSeconds < accumulatedSeconds + fd) {
-                targetFileIndex = j;
-                targetPositionInFile = remainingSeconds - accumulatedSeconds;
-                break;
-              }
-              accumulatedSeconds += fd;
-            }
-            break;
-          }
-        }
-        
-        fileIndex = targetFileIndex;
-        positionInFile = targetPositionInFile;
-        
+      const schedulePosition = await this.scheduleTimeService.getCurrentPosition(channel.id, initialMediaFiles, startTime);
+      if (schedulePosition) {
+        // Use schedule-based position directly (much simpler than old virtual time calculation!)
+        fileIndex = schedulePosition.fileIndex;
+        positionInFile = schedulePosition.seekPosition;
+
         logger.info(
           {
             channelId: channel.id,
-            virtualStartTime: virtualTime.virtualStartTime.toISOString(),
-            elapsedFromVirtualStart: Math.round(elapsedFromVirtualStart),
+            elapsedSeconds: schedulePosition.elapsedSeconds,
             initialMediaCount: initialMediaFiles.length,
             calculatedFileIndex: fileIndex,
             calculatedPositionInFile: positionInFile,
             calculatedFile: initialMediaFiles[fileIndex]?.filename || 'unknown',
           },
-          'EPG generateProgramsForDynamicPlaylistWithResolver: Calculated starting position from virtual time using actual media list'
+          'EPG generateProgramsForDynamicPlaylistWithResolver: Calculated starting position from schedule time using actual media list'
         );
       }
     }
@@ -501,7 +459,7 @@ export class EPGService {
       const currentMediaFiles = await this.playlistResolver!.resolveMedia(channel.id, context);
       totalMediaResolutions++;
 
-      logger.info(
+      logger.debug(
         {
           channelId: channel.id,
           iteration: loopIterations,
@@ -671,61 +629,9 @@ export class EPGService {
           break;
         }
 
-        // Get fresh metadata from file system if metadataExtractor is available
-        // This ensures we have accurate duration data for EPG generation
-        let fileDuration = mediaFile.metadata.duration;
-        if (this.metadataExtractor && mediaFile.path) {
-          logger.debug(
-            {
-              channelId: channel.id,
-              filename: mediaFile.filename,
-              hasMetadataExtractor: !!this.metadataExtractor,
-              hasPath: !!mediaFile.path,
-              path: mediaFile.path,
-              dbDuration: mediaFile.metadata.duration,
-            },
-            'EPG generateProgramsForDynamicPlaylistWithResolver: Attempting metadata extraction'
-          );
-          try {
-            const freshMetadata = await this.metadataExtractor.extract(mediaFile.path);
-            fileDuration = freshMetadata.duration;
-            const difference = Math.abs(fileDuration - mediaFile.metadata.duration);
-            if (difference > 10) { // Only log if there's a significant difference (>10 seconds)
-              logger.info(
-                {
-                  channelId: channel.id,
-                  filename: mediaFile.filename,
-                  dbDuration: mediaFile.metadata.duration,
-                  freshDuration: fileDuration,
-                  difference: difference,
-                },
-                'EPG generateProgramsForDynamicPlaylistWithResolver: Refreshed metadata from file system (significant difference)'
-              );
-            } else {
-              logger.debug(
-                {
-                  channelId: channel.id,
-                  filename: mediaFile.filename,
-                  dbDuration: mediaFile.metadata.duration,
-                  freshDuration: fileDuration,
-                  difference: difference,
-                },
-                'EPG generateProgramsForDynamicPlaylistWithResolver: Refreshed metadata from file system'
-              );
-            }
-          } catch (error) {
-            logger.warn(
-              {
-                channelId: channel.id,
-                filename: mediaFile.filename,
-                error,
-                fallbackDuration: fileDuration,
-              },
-              'EPG generateProgramsForDynamicPlaylistWithResolver: Failed to refresh metadata, using database value'
-            );
-            // Fall back to database metadata
-          }
-        }
+        // Use duration from database (already cached from library scan)
+        // If duration is inaccurate, it should be fixed during library scan, not here
+        const fileDuration = mediaFile.metadata.duration;
 
         const remainingInFile = fileDuration - positionInFile;
 
@@ -1433,19 +1339,19 @@ export class EPGService {
     channel: Channel
   ): Promise<number> {
     // Get the starting position used for EPG generation (same logic as generatePrograms)
-    const virtualTime = await this.virtualTimeService.getChannelVirtualTime(channel.id);
     let startFileIndex: number;
-    
-    if (virtualTime && virtualTime.virtualStartTime) {
+
+    const schedulePosition = await this.scheduleTimeService.getCurrentPosition(
+      channel.id,
+      mediaFiles,
+      programs[0]?.startTime || new Date()
+    );
+
+    if (schedulePosition) {
       // Use the same calculation as EPG generation
-      const virtualPosition = this.virtualTimeService.calculateCurrentVirtualPosition(
-        virtualTime,
-        mediaFiles,
-        programs[0]?.startTime || new Date()
-      );
-      startFileIndex = virtualPosition.currentIndex;
+      startFileIndex = schedulePosition.fileIndex;
     } else {
-      // No virtual time - use channel's current index (same as EPG generation fallback)
+      // No schedule time - use channel's current index (same as EPG generation fallback)
       startFileIndex = channel.getMetadata().currentIndex || 0;
     }
     
@@ -1556,10 +1462,11 @@ export class EPGService {
     const elapsedInProgram = Math.floor((now.getTime() - currentProgram.startTime.getTime()) / 1000);
     const elapsedInProgramSeconds = Math.max(0, elapsedInProgram);
 
-    // EPG is the single source of truth - get virtual time to determine starting position EPG used
-    const virtualTime = await this.virtualTimeService.getChannelVirtualTime(channel.id);
-    if (!virtualTime || !virtualTime.virtualStartTime) {
-      // No virtual timeline - can't determine position from EPG accurately
+    // Check if channel has schedule time initialized
+    const hasScheduleTime = await this.scheduleTimeService.hasScheduleTime(channel.id);
+    if (!hasScheduleTime) {
+      // No schedule time - can't determine position from EPG accurately
+      logger.debug({ channelId: channel.id }, 'No schedule time initialized for channel');
       return null;
     }
 
@@ -1651,14 +1558,14 @@ export class EPGService {
       
       if (firstFileDuration > 0 && firstProgramDuration < firstFileDuration) {
         // First program is partial - we need to calculate the initial position
-        // Get virtual position at EPG start time to find where we started in the file
+        // Get schedule position at EPG start time to find where we started in the file
         const epgStartTime = programs[0]?.startTime || now;
-        const virtualPosition = this.virtualTimeService.calculateCurrentVirtualPosition(
-          virtualTime,
+        const schedulePosition = await this.scheduleTimeService.getCurrentPosition(
+          channel.id,
           actualMediaFiles,
           epgStartTime
         );
-        const initialPositionInFile = virtualPosition.positionInFile;
+        const initialPositionInFile = schedulePosition?.seekPosition || 0;
         // Add elapsed time to initial position
         seekPosition = initialPositionInFile + elapsedInProgramSeconds;
       } else {
@@ -1709,6 +1616,70 @@ export class EPGService {
       fileIndex,
       seekPosition: Math.max(0, seekPosition),
     };
+  }
+
+  /**
+   * Extract unique media files from EPG programs in schedule order
+   * Used for concat file generation to ensure concat matches EPG
+   *
+   * @param programs - EPG programs (in chronological order)
+   * @param mediaFiles - Available media files to map from
+   * @returns Array of MediaFile objects in EPG order
+   */
+  public extractMediaFromPrograms(
+    programs: Program[],
+    mediaFiles: MediaFile[]
+  ): MediaFile[] {
+    const orderedMedia: MediaFile[] = [];
+    const seen = new Set<string>();
+
+    logger.debug(
+      { programCount: programs.length, mediaFileCount: mediaFiles.length },
+      'Extracting media from EPG programs for concat generation'
+    );
+
+    for (const program of programs) {
+      // Find media file matching program title
+      // Use multiple matching strategies to handle edge cases
+      const mediaFile = mediaFiles.find(m => {
+        const displayName = m.getDisplayName();
+        const title = m.info?.title || '';
+        const filename = m.filename;
+
+        // Try exact match on display name
+        if (displayName === program.info.title) return true;
+
+        // Try exact match on title
+        if (title === program.info.title) return true;
+
+        // Try partial match on filename (case insensitive)
+        if (filename.toLowerCase().includes(program.info.title.toLowerCase())) return true;
+
+        return false;
+      });
+
+      // Add media file if found and not already added
+      if (mediaFile && !seen.has(mediaFile.id)) {
+        orderedMedia.push(mediaFile);
+        seen.add(mediaFile.id);
+      } else if (!mediaFile) {
+        logger.warn(
+          { programTitle: program.info.title, programStart: program.startTime },
+          'No media file found matching EPG program'
+        );
+      }
+    }
+
+    logger.info(
+      {
+        programCount: programs.length,
+        extractedCount: orderedMedia.length,
+        uniqueFiles: seen.size
+      },
+      'Extracted media files from EPG programs'
+    );
+
+    return orderedMedia;
   }
 
   /**
@@ -1792,7 +1763,7 @@ export class EPGService {
 
     // Programs
     for (const [channelId, data] of channels) {
-      logger.info(
+      logger.debug(
         {
           channelId,
           channelName: data.channel.config.name,
@@ -1801,11 +1772,11 @@ export class EPGService {
         },
         'EPG generateXMLTV: Generating programs for channel'
       );
-      
+
       let programs: Program[];
       try {
         programs = await this.generatePrograms(data.channel, data.mediaFiles, now);
-        logger.info(
+        logger.debug(
           {
             channelId,
             channelName: data.channel.config.name,

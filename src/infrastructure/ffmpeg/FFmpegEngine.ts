@@ -13,7 +13,8 @@ ffmpeg.setFfmpegPath(config.ffmpeg.path);
 ffmpeg.setFfprobePath(config.ffmpeg.probePath);
 
 export interface StreamConfig {
-  inputFile: string; // Single file path
+  inputFile?: string; // Single file path (legacy, for backwards compatibility)
+  concatFile?: string; // Concat file path (new approach)
   outputDir: string;
   videoBitrate: number;
   audioBitrate: number;
@@ -35,18 +36,25 @@ export interface StreamHandle {
 export class FFmpegEngine {
   private activeStreams: Map<string, StreamHandle> = new Map();
   // With append_list flag: FFmpeg automatically manages segment numbering from existing playlist
-  // With discont_start flag: FFmpeg automatically adds EXT-X-DISCONTINUITY tags at transitions
+  // All files are re-encoded to identical parameters, so discontinuity tags may not be needed
 
   /**
-   * Start HLS streaming for a channel (one file at a time)
-   * @param onFileEnd - Callback when the current file finishes playing (for transitioning to next file)
+   * Start HLS streaming for a channel
+   * Uses concat demuxer for seamless transitions between files
+   * @param onFileEnd - Callback when stream ends (legacy, not used with concat)
    */
   public async start(
     channelId: string,
     streamConfig: StreamConfig,
     onFileEnd?: () => void
   ): Promise<StreamHandle> {
-    logger.info({ channelId, file: streamConfig.inputFile }, 'Starting FFmpeg stream for single file');
+    if (streamConfig.concatFile) {
+      logger.info({ channelId, concatFile: streamConfig.concatFile }, 'Starting FFmpeg stream with concat file');
+    } else if (streamConfig.inputFile) {
+      logger.info({ channelId, file: streamConfig.inputFile }, 'Starting FFmpeg stream for single file (legacy mode)');
+    } else {
+      throw new FFmpegError('Either inputFile or concatFile must be provided');
+    }
 
     try {
       // Ensure output directory exists
@@ -83,12 +91,38 @@ export class FFmpegEngine {
         // Playlist doesn't exist yet, will be created by FFmpeg
       }
 
-    // Verify input file exists before starting FFmpeg
-    try {
-      await fs.access(streamConfig.inputFile);
-    } catch (error) {
-      logger.error({ channelId, inputFile: streamConfig.inputFile }, 'Input file does not exist');
-      throw new FFmpegError(`Input file not found: ${streamConfig.inputFile}`);
+    // Verify input file exists before starting FFmpeg (only for legacy single-file mode)
+    if (streamConfig.inputFile) {
+      try {
+        await fs.access(streamConfig.inputFile);
+      } catch (error) {
+        logger.error({ channelId, inputFile: streamConfig.inputFile }, 'Input file does not exist');
+        throw new FFmpegError(`Input file not found: ${streamConfig.inputFile}`);
+      }
+    }
+
+    // Verify concat file exists and is valid before starting FFmpeg (for concat mode)
+    if (streamConfig.concatFile) {
+      try {
+        await fs.access(streamConfig.concatFile);
+        const content = await fs.readFile(streamConfig.concatFile, 'utf-8');
+        if (!content.trim()) {
+          throw new FFmpegError('Concat file is empty');
+        }
+        logger.debug(
+          { channelId, concatFile: streamConfig.concatFile, lines: content.split('\n').length },
+          'Validated concat file'
+        );
+      } catch (error) {
+        if (error instanceof FFmpegError) {
+          throw error;
+        }
+        logger.error(
+          { channelId, concatFile: streamConfig.concatFile, error },
+          'Concat file validation failed'
+        );
+        throw new FFmpegError(`Concat file not found or invalid: ${streamConfig.concatFile}`);
+      }
     }
 
     // CRITICAL: Stop any existing stream before starting new one
@@ -134,15 +168,21 @@ export class FFmpegEngine {
       this.activeStreams.set(channelId, handle);
 
       // Wait for stream to start (check for playlist file)
-      // Use 20 seconds for transitions to allow 2 segments to generate (6s each + processing)
-      // For initial starts, wait 30 seconds to ensure segments are generated
+      // Use 35 seconds for transitions to allow 2 segments to generate (15s each + processing)
+      // For initial starts, wait 45 seconds to ensure segments are generated
       // Note: We don't throw on timeout - just log a warning and let the stream continue
-      const streamStarted = await this.waitForStreamStart(streamConfig.outputDir, isTransition ? 20000 : 30000, isTransition, channelId);
+      const streamStarted = await this.waitForStreamStart(streamConfig.outputDir, isTransition ? 35000 : 45000, isTransition, channelId);
 
       if (streamStarted) {
         logger.info({ channelId, isTransition }, 'FFmpeg stream started successfully');
       } else {
-        logger.warn({ channelId, isTransition }, 'FFmpeg stream started but segments not detected yet (continuing anyway)');
+        // Check if handle is still in activeStreams (indicates process is still active)
+        const isStillActive = this.activeStreams.has(channelId);
+        if (!isStillActive) {
+          logger.error({ channelId, isTransition }, 'FFmpeg process is not active - stream may have failed to start');
+        } else {
+          logger.warn({ channelId, isTransition }, 'FFmpeg stream started but segments not detected yet (continuing anyway - process is active)');
+        }
       }
 
       return handle;
@@ -213,6 +253,25 @@ export class FFmpegEngine {
   ): Promise<void> {
     logger.info({ channelId, bumperPath: bumperSegmentPath }, 'Starting bumper stream (stream copy mode)');
 
+    // CRITICAL: Ensure previous stream is stopped before starting bumper
+    // The previous file's FFmpeg must be fully stopped so bumper can append to playlist
+    if (this.activeStreams.has(channelId)) {
+      logger.warn({ channelId }, 'Previous stream still active, stopping before bumper');
+      await this.stop(channelId);
+      // Give it a moment to fully stop and release file handles
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    
+    // Also ensure no orphaned FFmpeg processes are writing to the playlist
+    // This prevents file lock conflicts when bumper tries to append
+    const playlistCheckPath = path.join(streamConfig.outputDir, 'stream.m3u8');
+    try {
+      // Try to access the playlist file to ensure it's not locked
+      await fs.access(playlistCheckPath);
+    } catch {
+      // Playlist doesn't exist yet, that's OK - bumper will create it
+    }
+
     // Ensure output directory exists
     await fs.mkdir(streamConfig.outputDir, { recursive: true });
 
@@ -222,32 +281,67 @@ export class FFmpegEngine {
     return new Promise((resolve, reject) => {
       const command = ffmpeg(bumperSegmentPath);
 
-      // CRITICAL: Use stream copy mode - bumper is already encoded!
-      // Pre-generated bumpers are already perfect HLS segments, no re-encoding needed
+      // CRITICAL: Must RE-ENCODE bumpers to reset PTS/DTS timestamps!
+      // Stream copy preserves original timestamps which break continuity in live streams
+      // Roku is VERY strict about timestamp continuity
       command.inputOptions([
         '-fflags', '+genpts+igndts',
         '-avoid_negative_ts', 'make_zero',
-        '-re', // CRITICAL: Real-time mode to maintain proper timing
+        '-re', // Real-time mode
       ]);
 
-      // Stream copy - no re-encoding (bumper is already perfectly encoded)
-      command.videoCodec('copy');
-      command.audioCodec('copy');
+      // Re-encode to reset timestamps (not stream copy!)
+      command.videoCodec('libx264');
+      command.audioCodec('aac');
+      // Map streams - audio is optional (use ? to handle files without audio)
+      command.outputOptions(['-map', '0:v:0', '-map', '0:a?', '-sn']);
+      // Don't use command.fps() - let -fps_mode cfr handle frame rate
+
+      // Parse resolution
+      const [width, height] = streamConfig.resolution.split('x').map(Number);
+      const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
+      const divisor = gcd(width, height);
+      const darWidth = width / divisor;
+      const darHeight = height / divisor;
 
       command.outputOptions([
-        // HLS Output - stream copy mode (no re-encoding parameters needed)
+        '-preset', 'ultrafast', // Fast encoding for bumpers
+        '-pix_fmt', 'yuv420p',
+        '-vf', `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p,setdar=${darWidth}/${darHeight}`,
         '-f', 'hls',
         '-hls_time', streamConfig.segmentDuration.toString(),
-        '-hls_list_size', '30', // Match main streaming (30 segments)
-        // Continuous streaming: append_list maintains MEDIA-SEQUENCE across file→bumper→file transitions
-        // discont_start: FFmpeg automatically adds EXT-X-DISCONTINUITY tags at bumper transitions
-        '-hls_flags', 'append_list+discont_start+delete_segments+program_date_time+independent_segments+omit_endlist',
-        // No -start_number: FFmpeg automatically continues from last segment
+        '-hls_list_size', '30',
+        // Calculate delete threshold to keep ~10 minutes of segments total (same as main stream)
+        '-hls_delete_threshold', Math.max(1, Math.ceil((600 / streamConfig.segmentDuration) - 30)).toString(),
+        // split_by_time: Only cut segments at proper time boundaries (prevents partial segments during transitions)
+        // temp_file: Write segments atomically (prevents partial/corrupted segments if process is killed)
+        // NOTE: removed 'independent_segments' - incompatible with split_by_time in newer FFmpeg versions
+        '-hls_flags', 'append_list+delete_segments+program_date_time+omit_endlist+split_by_time+temp_file',
         '-hls_segment_filename', `${outputPattern}_%03d.ts`,
         '-hls_segment_type', 'mpegts',
-        '-bsf:v', 'h264_mp4toannexb', // Still need bitstream filter for HLS
-
-        '-y' // Overwrite output files
+        '-bsf:v', 'h264_mp4toannexb',
+        // CRITICAL: Mark as LIVE stream to match main stream mode
+        '-segment_list_flags', 'live',
+        '-hls_allow_cache', '0',
+        '-hls_base_url', '',
+        // Audio (only if audio stream exists - the ? in -map 0:a? makes it optional)
+        '-b:a', streamConfig.audioBitrate.toString(),
+        '-ac', '2',
+        '-ar', '48000',
+        // Note: If input has no audio, -b:a will be ignored (that's OK)
+        // Video - CRITICAL: Match main stream exactly!
+        '-b:v', streamConfig.videoBitrate.toString(),
+        '-maxrate', Math.floor(streamConfig.videoBitrate * 2).toString(),
+        '-bufsize', Math.floor(streamConfig.videoBitrate * 2).toString(),
+        // Keyframes - CRITICAL: Must align with segment boundaries!
+        // GOP = fps * segmentDuration ensures keyframes ONLY at segment boundaries
+        '-force_key_frames', `expr:gte(t,n_forced*${streamConfig.segmentDuration})`,
+        '-g', (streamConfig.fps * streamConfig.segmentDuration).toString(),
+        '-keyint_min', (streamConfig.fps * streamConfig.segmentDuration).toString(),
+        '-fps_mode', 'cfr',
+        // Explicitly set output frame rate (required when using -fps_mode cfr)
+        '-r', streamConfig.fps.toString(),
+        '-y'
       ]);
 
       command.output(playlistPath);
@@ -258,12 +352,14 @@ export class FFmpegEngine {
         // CRITICAL: Wait for bumper to start writing segments, then detect transition point
         // This avoids race condition of predicting segment numbers
         // Wait for bumper stream to start
-        // FFmpeg's discont_start flag will automatically add discontinuity tags
+        // For 15-second bumpers (1 segment), use shorter timeout and don't fail if timeout
         try {
-          await this.waitForStreamStart(streamConfig.outputDir, 5000, true, channelId);
-          logger.info({ channelId }, 'Bumper stream started (FFmpeg handles discontinuity tags automatically)');
+          await this.waitForStreamStart(streamConfig.outputDir, 3000, true, channelId);
+          logger.info({ channelId }, 'Bumper stream started');
         } catch (error) {
-          logger.warn({ channelId, error }, 'Failed to detect bumper start (bumper may be very short)');
+          // For very short bumpers (15 seconds = 1 segment), timeout is expected
+          // The bumper will still stream correctly, we just couldn't detect the first segment in time
+          logger.debug({ channelId, error }, 'Bumper start detection timeout (expected for 15s bumpers, continuing anyway)');
         }
       });
 
@@ -297,15 +393,33 @@ export class FFmpegEngine {
 
 
   /**
-   * Create FFmpeg command for HLS streaming (single file mode)
-   * With append_list flag, FFmpeg automatically continues segment numbering from existing playlist
+   * Create FFmpeg command for HLS streaming
+   * Uses concat demuxer for seamless transitions, or single file input (legacy)
    */
   private createCommand(
     streamConfig: StreamConfig,
     useFastPreset: boolean = false
   ): FfmpegCommand {
-    // Single file input
-    const command = ffmpeg(streamConfig.inputFile);
+    // Use concat file if provided, otherwise fall back to single file input (legacy)
+    let command: FfmpegCommand;
+    
+    if (streamConfig.concatFile) {
+      // Concat demuxer approach - seamless transitions
+      command = ffmpeg();
+      command.input(streamConfig.concatFile);
+      command.inputOptions([
+        '-stream_loop', '-1', // Loop concat playlist infinitely for 24/7 streaming
+        '-f', 'concat',
+        '-safe', '0', // Allow absolute paths
+        // Note: inpoint in concat file seeks to nearest keyframe - not frame-accurate
+        // For more accurate seeking, consider using -ss on individual files before concat
+      ]);
+    } else if (streamConfig.inputFile) {
+      // Legacy single file input
+      command = ffmpeg(streamConfig.inputFile);
+    } else {
+      throw new FFmpegError('Either inputFile or concatFile must be provided');
+    }
     
     // Prepare input options
     const inputOptions: string[] = [
@@ -336,15 +450,19 @@ export class FFmpegEngine {
 
     // Video codec (we'll set bitrate via outputOptions for consistency)
     command.videoCodec('libx264');
-    command.fps(streamConfig.fps);
+    // CRITICAL: Don't use command.fps() when using -fps_mode cfr
+    // command.fps() sets -r which can conflict with -fps_mode cfr
+    // Instead, let -fps_mode cfr handle frame rate conversion
+    // command.fps(streamConfig.fps); // REMOVED: Conflicts with -fps_mode cfr
 
     // Use configurable encoder preset (from environment variable FFMPEG_PRESET)
+    // For transitions, use ultrafast to reduce encoding delay
     // Valid presets: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
     // Trade-off: faster presets = lower quality but faster encoding, slower = better quality but slower
-    const encoderPreset = config.ffmpeg.preset;
+    const encoderPreset = useFastPreset ? 'ultrafast' : config.ffmpeg.preset;
     command.outputOptions(['-preset', encoderPreset]);
     logger.debug(
-      { preset: encoderPreset, isTransition: useFastPreset },
+      { preset: encoderPreset, isTransition: useFastPreset, originalPreset: config.ffmpeg.preset },
       'FFmpeg encoder preset configured'
     );
 
@@ -385,19 +503,25 @@ export class FFmpegEngine {
         // HLS Output Settings
         '-f', 'hls',
         '-hls_time', streamConfig.segmentDuration.toString(),
-        // Keep 30 segments in playlist (~3 minutes at 6s/segment) to prevent premature deletion
+        // Keep 30 segments in playlist (~7.5 minutes at 15s/segment) to prevent premature deletion
         // CRITICAL: Players (especially Roku) may buffer/lag behind FFmpeg generation
         // Larger window prevents 410 Gone errors during transitions and normal playback
         '-hls_list_size', '30',
-        // Continuous streaming flags with append_list for seamless transitions:
-        // append_list: Append new segments to existing playlist (maintains MEDIA-SEQUENCE continuity)
-        // delete_segments: Auto-clean old segments (sliding window) - safe with 30-segment buffer
-        // independent_segments: Better player compatibility
+        // Calculate delete threshold to keep ~10 minutes of segments total
+        // Total segments for 10 minutes = 600 seconds / segmentDuration
+        // Threshold = total segments - playlist size (keeps unreferenced segments on disk)
+        // This gives players more time to request older segments before they're deleted
+        '-hls_delete_threshold', Math.max(1, Math.ceil((600 / streamConfig.segmentDuration) - 30)).toString(),
+        // HLS flags for continuous streaming:
         // program_date_time: Include timestamps for sync
+        // delete_segments: Auto-clean old segments (sliding window) - safe with 30-segment buffer + threshold
         // omit_endlist: Keep stream open (no #EXT-X-ENDLIST)
-        // discont_start: FFmpeg automatically adds EXT-X-DISCONTINUITY tags at file transitions (built-in!)
-        '-hls_flags', 'append_list+discont_start+independent_segments+program_date_time+delete_segments+omit_endlist',
-        // No -start_number: FFmpeg automatically continues from last segment in existing playlist
+        // split_by_time: Only cut segments at proper time boundaries (prevents partial segments)
+        // temp_file: Write segments atomically (prevents partial/corrupted segments if process is killed)
+        // NOTE: No append_list needed - concat handles seamless transitions automatically
+        '-hls_flags', 'program_date_time+delete_segments+omit_endlist+split_by_time+temp_file',
+        // Start from segment 0 (concat creates a fresh stream)
+        '-hls_start_number_source', 'generic',
         '-hls_segment_filename', segmentPattern,
         '-hls_segment_type', 'mpegts',
 
@@ -418,14 +542,15 @@ export class FFmpegEngine {
         '-ac', '2', // Stereo
         '-ar', '48000', // High sample rate
         
-        // Keyframe management for better seeking
-        // GOP size = 2 seconds (fps * 2) - ensures keyframe at least every 2 seconds
-        // This aligns with segment boundaries for better seeking
+        // Keyframe management - CRITICAL: GOP must match segment duration for Roku
+        // GOP = fps * segmentDuration ensures keyframes align with discontinuity tags
         '-force_key_frames', `expr:gte(t,n_forced*${streamConfig.segmentDuration})`, // Force keyframes at segment boundaries
-        '-g', (streamConfig.fps * 2).toString(), // GOP size: 2 seconds worth of frames
-        '-keyint_min', (streamConfig.fps * 2).toString(), // Minimum keyframe interval matches GOP
+        '-g', (streamConfig.fps * streamConfig.segmentDuration).toString(), // GOP size: 15 seconds worth of frames (450 at 30fps)
+        '-keyint_min', (streamConfig.fps * streamConfig.segmentDuration).toString(), // Minimum keyframe interval matches GOP
         // Frame rate mode for smooth playback
         '-fps_mode', 'cfr', // Constant frame rate for smooth playback
+        // Explicitly set output frame rate (required when using -fps_mode cfr)
+        '-r', streamConfig.fps.toString(),
         
         // Video bitrate settings (VBR encoding for better quality/efficiency)
         // videoBitrate is in bps (e.g., 1500000 = 1.5 Mbps)
@@ -488,13 +613,16 @@ export class FFmpegEngine {
         // With append_list, FFmpeg automatically manages segment numbering
         // No manual tracking needed - each next FFmpeg process reads the playlist and continues
 
-        this.activeStreams.delete(channelId);
-
         // Notify that file finished - ChannelService will start next file/bumper
+        // CRITICAL: Call onFileEnd() BEFORE deleting activeStream
+        // Otherwise isStreaming() returns false and transition is skipped
         if (handle.onFileEnd) {
           logger.info({ channelId }, 'Triggering transition to next file');
           handle.onFileEnd();
         }
+
+        // Clean up after transition handler has run
+        this.activeStreams.delete(channelId);
       })
       .on('error', (err, stdout, stderr) => {
         // Get error details
@@ -556,8 +684,12 @@ export class FFmpegEngine {
 
     // Get baseline last segment NUMBER before FFmpeg starts (for transitions)
     // CRITICAL: Track segment NUMBER, not count! hls_list_size=30 keeps count constant!
+    // CRITICAL: Get baseline AFTER a small delay to ensure previous FFmpeg has fully released the playlist file
     let baselineLastSegment = -1;
     if (isTransition) {
+      // Small delay to ensure file system is consistent after previous FFmpeg process ended
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      
       try {
         const baselineContent = await fs.readFile(playlistPath, 'utf-8');
         const segments = baselineContent.match(/stream_(\d+)\.ts/g) || [];
@@ -573,6 +705,7 @@ export class FFmpegEngine {
         );
       } catch {
         // Playlist doesn't exist or can't be read, baseline stays -1
+        logger.warn({ channelId: channelId || 'unknown' }, 'Could not read baseline playlist for transition detection');
       }
     }
 
@@ -597,7 +730,7 @@ export class FFmpegEngine {
               const currentLastSegment = parseInt(lastSegMatch[1], 10);
               
               // If last segment number increased, transition occurred!
-              if (currentLastSegment > baselineLastSegment) {
+              if (baselineLastSegment >= 0 && currentLastSegment > baselineLastSegment) {
                 // Find the first NEW segment (first one after baseline)
                 // This is where we inject the discontinuity tag
                 let firstNewSegmentNumber = baselineLastSegment + 1;
@@ -609,7 +742,7 @@ export class FFmpegEngine {
                 });
                 
                 if (hasNewSegment && channelId) {
-                  // Transition detected - FFmpeg's discont_start flag will handle discontinuity tags automatically
+                  // Transition detected - discontinuity tags will be injected manually in PlaylistService
                   logger.info(
                     { 
                       channelId, 
@@ -623,8 +756,29 @@ export class FFmpegEngine {
                   );
                   return true;
                 }
+              } else if (baselineLastSegment < 0) {
+                // Baseline wasn't captured, but we have segments - assume transition succeeded
+                // This can happen if playlist was read before baseline was set
+                logger.info(
+                  { 
+                    channelId: channelId || 'unknown',
+                    currentLastSegment,
+                    totalSegments: allSegments.length,
+                    elapsed: Date.now() - startTime,
+                    note: 'Baseline not captured, but segments exist - assuming transition succeeded'
+                  },
+                  'Transition detected (fallback: segments exist without baseline)'
+                );
+                return true;
               }
             }
+          } else if (baselineLastSegment >= 0) {
+            // Playlist exists but has no segments - this is unusual for a transition
+            // Wait a bit longer for segments to appear
+            logger.debug(
+              { channelId: channelId || 'unknown', baselineLastSegment, elapsed: Date.now() - startTime },
+              'Transition: playlist exists but no segments yet, waiting...'
+            );
           }
 
           // Wait a bit before next check
@@ -655,15 +809,20 @@ export class FFmpegEngine {
       }
     }
 
-    // Timeout reached - log warning but don't throw error
+    // Timeout reached - check if process is still active
+    const isStillActive = channelId && this.activeStreams.has(channelId);
     logger.warn(
       {
         channelId: channelId || 'unknown',
         timeout,
         isTransition,
-        elapsed: Date.now() - startTime
+        elapsed: Date.now() - startTime,
+        isStillActive,
+        baselineLastSegment
       },
-      'Timeout waiting for stream segments (stream may still start)'
+      isStillActive 
+        ? 'Timeout waiting for stream segments (process is active, segments may appear soon)'
+        : 'Timeout waiting for stream segments (process may have failed)'
     );
     return false;
   }

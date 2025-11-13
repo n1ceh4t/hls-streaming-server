@@ -166,7 +166,7 @@ export class PlaylistResolver implements IPlaylistResolver {
     
     // Log what we found for debugging
     if (activeBlock) {
-      logger.info({
+      logger.debug({
         channelId,
         activeBlockId: activeBlock.id,
         activeBlockName: activeBlock.name,
@@ -207,11 +207,11 @@ export class PlaylistResolver implements IPlaylistResolver {
         
         mediaIds = await this.bucketService.getMediaInBucket(activeBlock.bucket_id);
         
-        logger.info(
-          { 
-            channelId, 
-            blockName: activeBlock.name, 
-            bucketId: activeBlock.bucket_id, 
+        logger.debug(
+          {
+            channelId,
+            blockName: activeBlock.name,
+            bucketId: activeBlock.bucket_id,
             mediaIdsCount: mediaIds.length,
             sampleMediaIds: mediaIds.slice(0, 3) // Log first 3 IDs for debugging
           },
@@ -253,8 +253,71 @@ export class PlaylistResolver implements IPlaylistResolver {
         } else {
           // Apply playback mode
           if (playbackMode === 'sequential') {
+            // CRITICAL: Progressive mode (sequential with progression) should only work with single-series buckets
+            // Check if bucket contains media from a single series
+            // Use efficient database query to get unique series names
+            const { Database } = await import('../../infrastructure/database/Database');
+            const seriesResult = await Database.query<{ show_name: string }>(
+              `SELECT DISTINCT show_name 
+               FROM media_files 
+               WHERE id = ANY($1::uuid[]) 
+                 AND file_exists = true 
+                 AND show_name IS NOT NULL 
+                 AND show_name != ''`,
+              [mediaIds]
+            );
+            const uniqueSeries = seriesResult.rows.map(row => row.show_name);
+            const seriesCount = uniqueSeries.length;
+            
+            // Progressive mode requires single series
+            // If multiple series detected, disable progression (start from beginning each time)
+            const hasMultipleSeries = seriesCount > 1;
+            const hasSingleSeries = seriesCount === 1;
+            
+            if (hasMultipleSeries) {
+              logger.warn(
+                {
+                  channelId,
+                  bucketId: activeBlock.bucket_id,
+                  seriesCount,
+                  seriesNames: uniqueSeries,
+                  mediaCount: mediaIds.length,
+                  note: 'Progressive mode disabled - bucket contains multiple series. Progression only works with single-series buckets. Day 1: s1e1, s1e2, s1e3... Day 2: s1e4, s1e5, s1e6... requires single series.'
+                },
+                'Bucket contains multiple series - progression disabled for sequential mode'
+              );
+              // Don't use progression - start from beginning each time
+              // Progression will not be saved/updated for multi-series buckets
+            } else if (!hasSingleSeries) {
+              // No series detected (movies or unclassified content)
+              logger.debug(
+                {
+                  channelId,
+                  bucketId: activeBlock.bucket_id,
+                  mediaCount: mediaIds.length,
+                  note: 'No series detected in bucket - progression may not work as expected'
+                },
+                'Bucket contains no series - progression may be limited'
+              );
+            } else {
+              logger.debug(
+                {
+                  channelId,
+                  bucketId: activeBlock.bucket_id,
+                  seriesName: uniqueSeries[0],
+                  mediaCount: mediaIds.length,
+                  note: 'Single series detected - progressive mode enabled'
+                },
+                'Bucket contains single series - progression enabled for sequential mode'
+              );
+            }
+            
             // For sequential, check progression and start from saved position
-            const progression = await this.bucketService.getProgression(channelId, activeBlock.bucket_id);
+            // Only use progression if bucket has single series
+            const progression = hasSingleSeries 
+              ? await this.bucketService.getProgression(channelId, activeBlock.bucket_id)
+              : null; // Disable progression for multi-series or no-series buckets
+            
             if (progression && progression.currentPosition !== undefined && progression.currentPosition > 0) {
               // Start from saved position, but ensure we have media after it
               const startPosition = progression.currentPosition;
@@ -262,7 +325,7 @@ export class PlaylistResolver implements IPlaylistResolver {
                 // Rotate array to start from saved position
                 const before = mediaIds.slice(0, startPosition);
                 const after = mediaIds.slice(startPosition);
-                mediaIds = [...after, ...before];
+                mediaIds = after.concat(before);
                 logger.debug(
                   { channelId, bucketId: activeBlock.bucket_id, startPosition, totalMedia: mediaIds.length },
                   'Resuming sequential playback from saved position'
@@ -364,7 +427,7 @@ export class PlaylistResolver implements IPlaylistResolver {
     // TODO: Phase 4 - Apply bucket prioritization/mixing
 
     // Log before fetching media files
-    logger.info(
+    logger.debug(
       {
         channelId,
         mediaIdsCount: mediaIds.length,
@@ -394,7 +457,7 @@ export class PlaylistResolver implements IPlaylistResolver {
     const validFiles = mediaFiles.filter((f): f is MediaFile => f !== null);
     const missingMediaIds = mediaIds.filter((_id, index) => mediaFiles[index] === null);
     
-    logger.info(
+    logger.debug(
       {
         channelId,
         mediaIdsCount: mediaIds.length,

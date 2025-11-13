@@ -291,25 +291,29 @@ class Application {
       // Setup routes
       await this.setupRoutes();
 
-      // Clean up old HLS output on server restart to start fresh
-      // This ensures FFmpeg starts from segment 0 on first stream start
-      logger.info('Cleaning up old HLS output...');
+      // Clean up old HLS segments on server restart
+      // NOTE: Do NOT delete playlist files - append_list requires them to exist!
+      // FFmpeg's append_list flag reads the existing playlist to continue segment numbering
+      // Deleting playlists breaks FFmpeg's ability to maintain continuity
+      logger.info('Cleaning up old HLS segments on server restart...');
       const channels = this.channelService.getAllChannels();
       for (const channel of channels) {
         try {
           const outputDir = channel.config.outputDir;
           const files = await fs.readdir(outputDir);
 
-          // Remove old .ts segments and .m3u8 playlists
+          // Remove old .ts segments only - NEVER delete .m3u8 playlists!
+          // append_list requires playlists to exist for segment numbering continuity
           let removedCount = 0;
           for (const file of files) {
-            if (file.endsWith('.ts') || file.endsWith('.m3u8')) {
+            if (file.endsWith('.ts')) {
               await fs.unlink(path.join(outputDir, file));
               removedCount++;
             }
+            // Explicitly skip .m3u8 files - append_list needs them
           }
 
-          logger.info({ channelId: channel.id, outputDir, removedCount }, 'Cleaned up old HLS files on server restart');
+          logger.info({ channelId: channel.id, outputDir, removedCount }, 'Cleaned up old HLS segments on server restart (playlists preserved for append_list)');
         } catch (error) {
           // Directory might not exist yet - that's fine
           logger.debug({ channelId: channel.id, error }, 'No HLS files to clean up');

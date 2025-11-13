@@ -328,6 +328,7 @@ async function setup() {
 
   // Database configuration
   console.log('\n🗄️  Database Configuration');
+  console.log('⚠️  PostgreSQL is required for all features (channels, media, scheduling, EPG)');
   const useDatabase = await question('Configure PostgreSQL database? (Y/n): ') || 'y';
   let dbHost = 'localhost';
   let dbPort = '5432';

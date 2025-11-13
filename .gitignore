@@ -48,6 +48,10 @@ coverage/
 *~
 .DS_Store
 
+# TypeScript
+*.tsbuildinfo
+.tsbuildinfo
+
 # OS
 Thumbs.db
 .directory
@@ -57,6 +61,7 @@ Thumbs.db
 
 # Backup files
 *.backup
+*.backup-*
 *.bak
 backups/
 

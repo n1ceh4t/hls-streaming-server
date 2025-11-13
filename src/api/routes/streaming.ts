@@ -132,7 +132,8 @@ stream.m3u8
 
     // Simply serve FFmpeg's playlist (or minimal fallback if not ready)
     // Pass channelId for transition tracking
-    const playlist = await playlistService.getPlaylist(playlistPath, channel.id);
+    // TEMPORARY DEBUG: Always return original playlist
+    const playlist = await playlistService.getPlaylist(playlistPath, channel.id, true);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Cache-Control', 'no-cache');

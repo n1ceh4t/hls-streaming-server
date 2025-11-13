@@ -27,7 +27,7 @@ const envSchema = z.object({
   DEFAULT_AUDIO_BITRATE: z.coerce.number().positive().default(128000),
   DEFAULT_RESOLUTION: z.string().default('1920x1080'),
   DEFAULT_FPS: z.coerce.number().min(1).max(120).default(30),
-  DEFAULT_SEGMENT_DURATION: z.coerce.number().min(1).max(30).default(6),
+  DEFAULT_SEGMENT_DURATION: z.coerce.number().min(1).max(30).default(15),
   MAX_CONCURRENT_STREAMS: z.coerce.number().min(1).max(100).default(8),
 
   // Security

@@ -307,6 +307,17 @@ export class MediaFileRepository {
   }
 
   /**
+   * Get total count of all media files
+   */
+  public async getTotalCount(): Promise<number> {
+    const result = await Database.query<{ count: string | number }>(
+      'SELECT COUNT(*) as count FROM media_files WHERE file_exists = true'
+    );
+    const count = result.rows[0]?.count;
+    return count ? Number(count) : 0;
+  }
+
+  /**
    * Convert database row to MediaFile entity
    */
   public static rowToMediaFile(row: MediaFileRow): MediaFile {

@@ -74,7 +74,7 @@ export const createEPGRoutes = (channelService: ChannelService, epgService: EPGS
           // But allow empty media - EPG might be cached or generatePrograms might handle it
           try {
             mediaFiles = await channelService.getChannelMedia(channel.id);
-            logger.info(
+            logger.debug(
               {
                 channelId: channel.id,
                 slug: channel.config.slug,
@@ -118,7 +118,7 @@ export const createEPGRoutes = (channelService: ChannelService, epgService: EPGS
         );
       }
       
-      logger.info(
+      logger.debug(
         {
           totalChannels: channels.length,
           channelsInMap: channelMap.size,

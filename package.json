@@ -14,8 +14,9 @@
     "lint:fix": "node node_modules/eslint/bin/eslint.js src --ext .ts --fix",
     "format": "node node_modules/prettier/bin/prettier.cjs --write \"src/**/*.ts\"",
     "setup": "node scripts/setup.js",
-    "migrate": "bash scripts/migrate.sh",
+    "migrate": "node scripts/migrate.js",
     "migrate:ts": "node node_modules/tsx/dist/cli.mjs scripts/migrate.ts",
+    "migrate:sh": "bash scripts/migrate.sh",
     "test-parser": "node node_modules/tsx/dist/cli.mjs scripts/test-media-parser.ts",
     "docker:build": "docker build -t hls-iptv-server .",
     "docker:run": "docker-compose up -d"

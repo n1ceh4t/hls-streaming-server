@@ -368,6 +368,13 @@ export class LibraryService {
   /**
    * Get library statistics
    */
+  /**
+   * Get total count of all media files
+   */
+  public async getTotalMediaCount(): Promise<number> {
+    return this.mediaFileRepository.getTotalCount();
+  }
+
   public async getLibraryStats(libraryId: string): Promise<{
     totalFiles: number;
     totalSize: number;

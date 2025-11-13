@@ -62,7 +62,7 @@ export class StateStore {
       // Atomic rename
       await fs.rename(tempPath, this.stateFilePath);
 
-      logger.info(
+      logger.debug(
         { channelCount: state.channels.length },
         'State saved successfully'
       );

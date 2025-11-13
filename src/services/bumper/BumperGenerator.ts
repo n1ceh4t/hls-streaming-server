@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { spawn } from 'child_process';
 import { createLogger } from '../../utils/logger';
-import { config } from '../../config/env';
+import { config as envConfig } from '../../config/env';
 
 const logger = createLogger('BumperGenerator');
 
@@ -157,7 +157,7 @@ export class BumperGenerator {
   // Track active FFmpeg processes by segmentsDir to prevent duplicates and enable cleanup
   private activeGenerations: Map<string, ActiveGeneration> = new Map();
 
-  constructor(bumpersDir: string = path.join(config.paths.temp, 'bumpers')) {
+  constructor(bumpersDir: string = path.join(envConfig.paths.temp, 'bumpers')) {
     this.bumpersDir = bumpersDir;
   }
 
@@ -202,7 +202,7 @@ export class BumperGenerator {
     return this.generateBumperSegmentsDirect(
       'Stream Starting',
       'Please wait...',
-      3 * segmentDuration, // Generate 3 segments worth (18 seconds for 6s segments)
+      segmentDuration, // Generate exactly 1 segment (15 seconds for 15s segments)
       segmentsDir,
       videoBitrate,
       audioBitrate,
@@ -269,6 +269,187 @@ export class BumperGenerator {
       fps,
       config // Pass enhanced config
     );
+  }
+
+  /**
+   * Generate a single MP4 bumper file (for concat approach)
+   * 
+   * Overwrites the same file each time - the concat file always references the same path,
+   * but we regenerate the content dynamically when each episode starts.
+   * This ensures the "Up Next" bumper always shows the correct next episode.
+   * 
+   * @param config - Bumper configuration (showName/episodeName should be for the NEXT episode)
+   * @param outputPath - Path to output MP4 file (will be overwritten with fresh content)
+   * @returns Path to the generated bumper file
+   */
+  public async generateBumperMP4(
+    config: EnhancedBumperConfig & {
+      videoBitrate: number;
+      audioBitrate: number;
+    },
+    outputPath: string
+  ): Promise<string> {
+    const { showName, episodeName, duration, resolution, fps, videoBitrate, audioBitrate } = config;
+    
+    logger.info(
+      { showName, episodeName, duration, outputPath },
+      'Generating bumper MP4 file for concat'
+    );
+
+    // Ensure output directory exists BEFORE starting FFmpeg
+    const outputDir = path.dirname(outputPath);
+    await fs.mkdir(outputDir, { recursive: true });
+
+    // Parse resolution
+    const [width, height] = resolution.split('x').map(Number);
+
+    // Generate the bumper as MP4 (reuse the segment generation logic but output as MP4)
+    // We'll use the same filter complex but output to MP4 instead of segments
+    return new Promise(async (resolve, reject) => {
+      // Validate inputs
+      const safeDuration = PathValidator.validateNumber(duration, 1, 60, 10);
+      const safeWidth = PathValidator.validateNumber(width, 320, 7680, 1920);
+      const safeHeight = PathValidator.validateNumber(height, 240, 4320, 1080);
+      const safeFps = PathValidator.validateNumber(fps, 1, 120, 30);
+
+      // Build text content
+      const label = config.template?.text?.label || 'Up Next';
+      const titleText = episodeName
+        ? `${label}:\n${showName}\n${episodeName}`
+        : `${label}:\n${showName}`;
+
+      // Write text to temporary file (directory already created above)
+      const textFilePath = path.join(outputDir, 'bumper_text.txt');
+      try {
+        await fs.writeFile(textFilePath, titleText, 'utf-8');
+      } catch (error) {
+        reject(new Error(`Failed to create text file: ${error}`));
+        return;
+      }
+      
+      // Build FFmpeg command (similar to generateBumperSegmentsDirect but output MP4)
+      const args: string[] = [];
+      const filterComplex: string[] = [];
+      
+      // Video input (solid black background)
+      args.push('-f', 'lavfi', '-i', `color=c=black:s=${safeWidth}x${safeHeight}:d=${safeDuration}:r=${safeFps}`);
+      // Use [0:v] directly as background (no need for null filter - just reference the stream)
+      
+      // Text overlay - draw text directly on [0:v] and output as [v]
+      filterComplex.push(
+        `[0:v]drawtext=textfile='${textFilePath}':fontsize=${safeHeight / 15}:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2[v]`
+      );
+      
+      // Audio handling - add audio input BEFORE filter_complex
+      let audioInputIndex = 1;
+      if (config.audioFile) {
+        try {
+          const audioPath = PathValidator.validatePath(config.audioFile);
+          await fs.access(audioPath);
+          args.push('-i', audioPath);
+          // Audio will be [1:a]
+        } catch {
+          // Audio file not found, generate silence
+          args.push('-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${safeDuration}`);
+          audioInputIndex = 1;
+        }
+      } else {
+        // Generate silence for audio
+        args.push('-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo:d=${safeDuration}`);
+        audioInputIndex = 1;
+      }
+      
+      // FFmpeg command
+      // Map video from filter complex [v] (filter graph output) and audio from input 1:a (input stream, no brackets)
+      const ffmpegArgs = [
+        ...args,
+        '-filter_complex', filterComplex.join(';'),
+        '-map', '[v]',  // Filter graph output - use brackets
+        '-map', `${audioInputIndex}:a`,  // Input stream - no brackets
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-b:v', videoBitrate.toString(),
+        '-c:a', 'aac',
+        '-b:a', audioBitrate.toString(),
+        '-r', safeFps.toString(),
+        '-t', safeDuration.toString(),
+        '-y', // Overwrite output file
+        outputPath
+      ];
+      
+      // Use imported envConfig (not the function parameter 'config')
+      const ffmpegPath = envConfig.ffmpeg?.path || 'ffmpeg';
+      const ffmpegProcess = spawn(ffmpegPath, ffmpegArgs);
+      
+      let stderr = '';
+      let hasResolved = false;
+      
+      // Capture stderr for error diagnostics
+      ffmpegProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      const timeoutId = setTimeout(() => {
+        if (!hasResolved) {
+          ffmpegProcess.kill('SIGKILL');
+          hasResolved = true;
+          const error = new Error(`Bumper MP4 generation timeout after ${(safeDuration + 30) * 1000}ms`);
+          logger.error({ 
+            error, 
+            outputPath, 
+            stderr: stderr.substring(stderr.length - 500) 
+          }, 'Bumper MP4 generation timeout');
+          reject(error);
+        }
+      }, (safeDuration + 30) * 1000);
+      
+      ffmpegProcess.on('close', async (code) => {
+        clearTimeout(timeoutId);
+        
+        // Clean up text file
+        try {
+          await fs.unlink(textFilePath).catch(() => {});
+        } catch {
+          // Ignore cleanup errors
+        }
+        
+        if (hasResolved) return;
+        
+        if (code === 0) {
+          try {
+            const stats = await fs.stat(outputPath);
+            logger.info(
+              { outputPath, sizeMB: (stats.size / 1024 / 1024).toFixed(2) },
+              'Bumper MP4 generated successfully'
+            );
+            hasResolved = true;
+            resolve(outputPath);
+          } catch (error) {
+            hasResolved = true;
+            reject(new Error(`Failed to verify bumper MP4: ${error}`));
+          }
+        } else {
+          hasResolved = true;
+          const error = new Error(`FFmpeg exited with code ${code}: ${stderr.substring(stderr.length - 500)}`);
+          logger.error({ 
+            error, 
+            outputPath, 
+            exitCode: code, 
+            stderr: stderr.substring(stderr.length - 500),
+            ffmpegArgs: ffmpegArgs.slice(0, 10) // Log first 10 args for debugging
+          }, 'Bumper MP4 generation FFmpeg error');
+          reject(error);
+        }
+      });
+      
+      ffmpegProcess.on('error', (error) => {
+        clearTimeout(timeoutId);
+        if (!hasResolved) {
+          hasResolved = true;
+          reject(new Error(`FFmpeg process error: ${error}`));
+        }
+      });
+    });
   }
 
   /**
@@ -533,6 +714,9 @@ export class BumperGenerator {
       // Build final FFmpeg command
       const outputSegmentPath = path.join(segmentsDir, 'bumper_000.ts');
 
+      // Calculate GOP size to match segment duration (keyframes must align with segment boundaries)
+      const gopSize = fps * duration;
+
       // Base FFmpeg arguments
       const baseArgs = [
         // Video codec
@@ -560,10 +744,13 @@ export class BumperGenerator {
         '-maxrate', Math.floor(videoBitrate * 1.1).toString(),
         '-minrate', Math.floor(videoBitrate * 0.8).toString(),
         '-bufsize', '2000k',
-        // Keyframes
-        '-force_key_frames', 'expr:gte(t,n_forced*2)',
-        '-g', '60',
-        '-keyint_min', '60',
+        // Keyframes - CRITICAL: Match main stream keyframe interval for Roku compatibility
+        // Roku expects consistent GOP structure
+        // Main stream uses keyframes every segment duration, bumper must match
+        // GOP = fps * duration (e.g., 30fps * 15s = 450 frames)
+        '-force_key_frames', `expr:gte(t,n_forced*${duration})`,
+        '-g', gopSize.toString(),
+        '-keyint_min', gopSize.toString(),
         '-fps_mode', 'cfr',
         // Overwrite
         '-y',
@@ -599,7 +786,7 @@ export class BumperGenerator {
         filterCount: filterComplex.length 
       }, 'Bumper segments FFmpeg command starting');
 
-      const ffmpegProcess = spawn(config.ffmpeg.path, args);
+      const ffmpegProcess = spawn(envConfig.ffmpeg.path, args);
 
       let stderr = '';
       let hasResolved = false;
@@ -793,7 +980,7 @@ export class BumperGenerator {
         outputPath
       ];
 
-      const ffmpegProcess = spawn(config.ffmpeg.path, args);
+      const ffmpegProcess = spawn(envConfig.ffmpeg.path, args);
       let stderr = '';
       ffmpegProcess.stderr.on('data', (data) => { stderr += data.toString(); });
 
