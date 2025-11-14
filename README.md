@@ -48,6 +48,7 @@ An HLS/IPTV streaming server for creating multi-channel streaming services from 
 - Global buckets (shared across channels)
 - Channel-specific buckets
 - Media filtering and organization
+- Series hierarchy extraction
 
 **Schedule Blocks**: Time-based programming rules that:
 - Define when specific content plays (time ranges, days of week)
@@ -582,24 +583,8 @@ Days of guide data: 2 (matches HLS server's 48-hour lookahead)
 
 5. Click **Save**
 
-#### Step 4: Map Channels to EPG
 
-1. Go to **Dashboard** → **Live TV** → **Channels**
-2. For each channel, click the **⋮** (three dots) menu → **Edit**
-3. In the **Guide** section:
-   - Match the channel to its EPG data by name
-   - Jellyfin should auto-match if channel names match between M3U and XMLTV
-   - If not matched, manually select the correct guide entry
-4. Verify that **Enable** is checked
-5. Click **Save**
-
-#### Step 5: Refresh Guide Data
-
-1. Go to **Dashboard** → **Live TV** → **Guide Data Providers**
-2. Click the **Refresh Guide Data** button
-3. Wait for the refresh to complete (check **Dashboard** → **Scheduled Tasks**)
-
-#### Step 6: Verify Setup
+#### Step 4: Verify Setup
 
 1. Navigate to **Live TV** in the Jellyfin main menu
 2. You should see:
@@ -630,6 +615,10 @@ Days of guide data: 2 (matches HLS server's 48-hour lookahead)
 - Check Jellyfin scheduled tasks for errors
 - Verify no firewall blocking EPG URL
 - Try reducing **Refresh guide every** to 4 hours if too frequent
+
+**NOTE:**
+Jellyfin caches EPG and stream segments (if not passthru,) which can make it appear as if the server is streaming incorrect content.
+This generally only happens under rapid testing or frequent playlist updating. For general usage, it probably isn't an issue.
 
 #### Advanced Configuration
 
