@@ -189,5 +189,97 @@ export class ScheduleRepository {
 
     return result.rows;
   }
+
+  /**
+   * Get the next schedule block transition time after currentTime
+   *
+   * This is critical for EPG generation - ensures EPG checks at exact block boundaries
+   * instead of using fixed intervals that might miss transitions.
+   *
+   * @param channelId - Channel ID
+   * @param currentTime - Current time (defaults to now)
+   * @returns Date of next transition, or null if no future transitions found
+   */
+  public async getNextTransitionTime(
+    channelId: string,
+    currentTime: Date = new Date()
+  ): Promise<Date | null> {
+    const blocks = await this.getEnabledBlocksForChannel(channelId);
+
+    if (blocks.length === 0) {
+      return null;
+    }
+
+    const currentDayOfWeek = currentTime.getDay();
+    const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+
+    let nextTransition: Date | null = null;
+    let minTimeDiff = Infinity;
+
+    // Check all blocks to find the nearest future transition (start time)
+    for (const block of blocks) {
+      const startMinutes = this.timeToMinutes(block.start_time);
+
+      // Determine which days this block applies to
+      const applicableDays = block.day_of_week === null
+        ? [0, 1, 2, 3, 4, 5, 6] // All days
+        : block.day_of_week;
+
+      // Check each applicable day to find nearest future occurrence
+      for (const targetDay of applicableDays) {
+        // Calculate days until this occurrence
+        let daysUntil = (targetDay - currentDayOfWeek + 7) % 7;
+
+        // If it's today, check if the time has passed
+        if (daysUntil === 0) {
+          if (startMinutes <= currentMinutes) {
+            // Block starts today but time has passed - check next week
+            daysUntil = 7;
+          }
+          // else: Block starts today in the future - use daysUntil = 0
+        }
+
+        // Calculate the actual transition time
+        const transitionTime = new Date(currentTime);
+        transitionTime.setDate(transitionTime.getDate() + daysUntil);
+
+        // Set time to block's start time
+        const [hours, minutes, seconds] = block.start_time.split(':').map(Number);
+        transitionTime.setHours(hours, minutes, seconds || 0, 0);
+
+        // Calculate time difference in milliseconds
+        const timeDiff = transitionTime.getTime() - currentTime.getTime();
+
+        // Only consider future transitions (timeDiff > 0) and find the minimum
+        if (timeDiff > 0 && timeDiff < minTimeDiff) {
+          minTimeDiff = timeDiff;
+          nextTransition = transitionTime;
+        }
+      }
+    }
+
+    if (nextTransition) {
+      logger.debug(
+        {
+          channelId,
+          currentTime: currentTime.toISOString(),
+          nextTransition: nextTransition.toISOString(),
+          minutesUntil: Math.round(minTimeDiff / 1000 / 60),
+        },
+        'Found next schedule block transition'
+      );
+    } else {
+      logger.debug(
+        {
+          channelId,
+          currentTime: currentTime.toISOString(),
+          blocksChecked: blocks.length,
+        },
+        'No future schedule block transitions found'
+      );
+    }
+
+    return nextTransition;
+  }
 }
 

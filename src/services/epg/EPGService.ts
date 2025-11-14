@@ -659,16 +659,49 @@ export class EPGService {
       }
 
       // Generate programs from current media until we need to check again
-      // Check every 5 minutes to catch schedule block transitions
-      // BUT: Generate one program per file (full duration), don't split files into 5-minute chunks
-      const checkInterval = 5 * 60 * 1000; // 5 minutes - only for checking schedule block changes
-      // Calculate the next check time at the START of this interval, and don't recalculate it
-      // This ensures we generate full-file programs even if they extend past the check interval
+      // CRITICAL: Check at exact schedule block transition times to ensure EPG accuracy
+      // This ensures EPG shows correct programs at precise block boundaries (not 5-min delayed)
       const intervalStartTime = new Date(currentTime);
-      const nextCheckTime = new Date(Math.min(
-        intervalStartTime.getTime() + checkInterval,
-        endTime.getTime()
-      ));
+
+      // Get the next schedule block transition time
+      const nextTransitionTime = await this.scheduleRepository.getNextTransitionTime(
+        channel.id,
+        currentTime
+      );
+
+      // Use the earlier of: next transition time, 5 minutes from now, or endTime
+      // Fallback to 5 minutes if no transition found (for non-dynamic playlists)
+      const maxCheckInterval = 5 * 60 * 1000; // 5 minutes max (fallback)
+      let nextCheckTime: Date;
+
+      if (nextTransitionTime && nextTransitionTime.getTime() < intervalStartTime.getTime() + maxCheckInterval) {
+        // Use exact transition time (earlier than 5 minutes)
+        nextCheckTime = new Date(Math.min(nextTransitionTime.getTime(), endTime.getTime()));
+        logger.debug(
+          {
+            channelId: channel.id,
+            currentTime: currentTime.toISOString(),
+            nextTransitionTime: nextTransitionTime.toISOString(),
+            minutesUntil: Math.round((nextTransitionTime.getTime() - currentTime.getTime()) / 1000 / 60),
+          },
+          'EPG using exact schedule block transition time for next check'
+        );
+      } else {
+        // Use 5-minute fallback (no transition in next 5 minutes, or no transition found)
+        nextCheckTime = new Date(Math.min(
+          intervalStartTime.getTime() + maxCheckInterval,
+          endTime.getTime()
+        ));
+        logger.debug(
+          {
+            channelId: channel.id,
+            currentTime: currentTime.toISOString(),
+            nextCheckTime: nextCheckTime.toISOString(),
+            reason: nextTransitionTime ? 'transition > 5 min away' : 'no transition found',
+          },
+          'EPG using 5-minute fallback interval for next check'
+        );
+      }
 
       let programsGeneratedThisInterval = 0;
       // Generate programs - continue generating full-file programs until we've advanced past the check time
