@@ -174,8 +174,8 @@ stream.m3u8
       throw new ValidationError('Invalid segment name');
     }
 
-    // Validate segment filename - allow both stream_XXX.ts and starting.ts (placeholder)
-    if (!/^(stream_\d+\.ts|starting\.ts)$/.test(segment)) {
+    // Validate segment filename - allow stream_XXX.m4s, starting.m4s (placeholder), and init.mp4 (fMP4 initialization)
+    if (!/^(stream_\d+\.m4s|starting\.m4s|init\.mp4)$/.test(segment)) {
       return next(new NotFoundError('Segment'));
     }
 

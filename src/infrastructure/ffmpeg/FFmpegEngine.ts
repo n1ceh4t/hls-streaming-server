@@ -110,17 +110,17 @@ export class FFmpegEngine {
       // Ensure output directory exists
       await fs.mkdir(streamConfig.outputDir, { recursive: true });
       
-      // Remove starting.ts before FFmpeg starts to avoid "Duplicated segment filename" error
-      // starting.ts is only for initial starts (PlaylistService adds it dynamically)
-      // During transitions, FFmpeg should not see starting.ts in the output directory
-      const startingTsPath = path.join(streamConfig.outputDir, 'starting.ts');
+      // Remove starting segment before FFmpeg starts to avoid "Duplicated segment filename" error
+      // starting segment is only for initial starts (PlaylistService adds it dynamically)
+      // During transitions, FFmpeg should not see starting segment in the output directory
+      const startingSegmentPath = path.join(streamConfig.outputDir, 'starting.m4s');
       try {
-        await fs.unlink(startingTsPath);
-        logger.debug({ channelId }, 'Removed starting.ts before FFmpeg start (PlaylistService will add it dynamically)');
+        await fs.unlink(startingSegmentPath);
+        logger.debug({ channelId }, 'Removed starting.m4s before FFmpeg start (PlaylistService will add it dynamically)');
       } catch (error) {
-        // starting.ts might not exist, that's OK
+        // starting segment might not exist, that's OK
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          logger.debug({ channelId, error }, 'Note: Could not remove starting.ts');
+          logger.debug({ channelId, error }, 'Note: Could not remove starting.m4s');
         }
       }
       
@@ -131,7 +131,7 @@ export class FFmpegEngine {
       try {
         await fs.access(playlistPath);
         const playlistContent = await fs.readFile(playlistPath, 'utf-8');
-        const hasSegments = /stream_\d+\.ts/.test(playlistContent);
+        const hasSegments = /stream_\d+\.m4s/.test(playlistContent);
 
         if (hasSegments) {
           isTransition = true;
@@ -342,6 +342,9 @@ export class FFmpegEngine {
       command.audioCodec('aac');
       // Map streams - audio is optional (use ? to handle files without audio)
       command.outputOptions(['-map', '0:v:0', '-map', '0:a?', '-sn']);
+
+      // Wine/VRChat compatibility: Force AAC-LC profile for maximum compatibility
+      command.outputOptions(['-profile:a', 'aac_low']);
       // Don't use command.fps() - let -fps_mode cfr handle frame rate
 
       // Parse resolution
@@ -363,18 +366,25 @@ export class FFmpegEngine {
         // split_by_time: Only cut segments at proper time boundaries (prevents partial segments during transitions)
         // temp_file: Write segments atomically (prevents partial/corrupted segments if process is killed)
         // NOTE: removed 'independent_segments' - incompatible with split_by_time in newer FFmpeg versions
-        '-hls_flags', 'append_list+delete_segments+program_date_time+omit_endlist+split_by_time+temp_file',
-        '-hls_segment_filename', `${outputPattern}_%03d.ts`,
-        '-hls_segment_type', 'mpegts',
-        '-bsf:v', 'h264_mp4toannexb',
+        // NOTE: Removed program_date_time and omit_endlist for better Wine/MediaFoundation compatibility
+        '-hls_flags', 'append_list+delete_segments+split_by_time+temp_file',
+        '-hls_segment_filename', `${outputPattern}_%03d.m4s`,
+        '-hls_segment_type', 'fmp4',
+        '-hls_fmp4_init_filename', 'init.mp4',
         // CRITICAL: Mark as LIVE stream to match main stream mode
         '-segment_list_flags', 'live',
-        '-hls_allow_cache', '0',
+        '-hls_allow_cache', '1',
         '-hls_base_url', '',
         // Audio (only if audio stream exists - the ? in -map 0:a? makes it optional)
+        // Wine/VRChat compatibility: AAC-LC profile with conservative settings
         '-b:a', streamConfig.audioBitrate.toString(),
         '-ac', '2',
-        '-ar', '48000',
+        '-ar', '44100', // 44.1kHz is more universally compatible with Wine/MediaFoundation than 48kHz
+        '-channel_layout', 'stereo', // Explicit channel layout for Wine/MediaFoundation compatibility
+        '-profile:a', 'aac_low', // Force AAC-LC for Wine/MediaFoundation compatibility
+        '-aac_coder', 'twoloop', // Better quality and compatibility than default 'fast'
+        '-max_delay', '0', // Minimize audio buffering delay
+        '-af', 'aresample=async=1', // Audio resampling with async=1 for smooth playback
         // Note: If input has no audio, -b:a will be ignored (that's OK)
         // Video - CRITICAL: Match main stream exactly!
         '-b:v', streamConfig.videoBitrate.toString(),
@@ -524,7 +534,7 @@ export class FFmpegEngine {
 
     // HLS options
     const playlistPath = path.join(streamConfig.outputDir, 'stream.m3u8');
-    const segmentPattern = path.join(streamConfig.outputDir, 'stream_%03d.ts');
+    const segmentPattern = path.join(streamConfig.outputDir, 'stream_%03d.m4s');
 
         // Segment pattern - always start from 0 for each new file
 
@@ -562,34 +572,35 @@ export class FFmpegEngine {
         // This gives players more time to request older segments before they're deleted
         '-hls_delete_threshold', Math.max(1, Math.ceil((600 / streamConfig.segmentDuration) - 30)).toString(),
         // HLS flags for continuous streaming:
-        // program_date_time: Include timestamps for sync
         // delete_segments: Auto-clean old segments (sliding window) - safe with 30-segment buffer + threshold
-        // omit_endlist: Keep stream open (no #EXT-X-ENDLIST)
         // split_by_time: Only cut segments at proper time boundaries (prevents partial segments)
         // temp_file: Write segments atomically (prevents partial/corrupted segments if process is killed)
         // NOTE: No append_list needed - concat handles seamless transitions automatically
-        '-hls_flags', 'program_date_time+delete_segments+omit_endlist+split_by_time+temp_file',
+        // NOTE: Removed program_date_time and omit_endlist for better Wine/MediaFoundation compatibility
+        '-hls_flags', 'delete_segments+split_by_time+temp_file',
         // Start from segment 0 (concat creates a fresh stream)
         '-hls_start_number_source', 'generic',
         '-hls_segment_filename', segmentPattern,
-        '-hls_segment_type', 'mpegts',
-
-        // Bitstream filters for codec compatibility
-        // h264_mp4toannexb: Convert H.264 from MP4 format to Annex B (required for HLS)
-        // Note: No audio filter needed - AAC in MPEGTS uses ADTS format naturally
-        '-bsf:v', 'h264_mp4toannexb',
+        '-hls_segment_type', 'fmp4',
+        '-hls_fmp4_init_filename', 'init.mp4',
 
         // Live playlist mode for better segment handling
         '-segment_list_flags', 'live',
         // No playlist type - let PlaylistService handle this
-        '-hls_allow_cache', '0', // Disable caching
+        '-hls_allow_cache', '1', // Enable caching for better Wine/MediaFoundation compatibility
         '-hls_base_url', '', // No base URL
         
         // Audio settings (set explicitly here to control format)
         // audioBitrate is in bps (e.g., 128000 = 128 kbps)
+        // Wine/VRChat compatibility: AAC-LC profile with conservative settings
         '-b:a', streamConfig.audioBitrate.toString(),
         '-ac', '2', // Stereo
-        '-ar', '48000', // High sample rate
+        '-ar', '44100', // 44.1kHz is more universally compatible with Wine/MediaFoundation than 48kHz
+        '-channel_layout', 'stereo', // Explicit channel layout for Wine/MediaFoundation compatibility
+        '-profile:a', 'aac_low', // Force AAC-LC (Low Complexity) for Wine/MediaFoundation compatibility
+        '-aac_coder', 'twoloop', // Better quality encoder (more compatible than 'fast', less CPU than 'anmr')
+        '-max_delay', '0', // Minimize audio buffering delay
+        '-af', 'aresample=async=1', // Audio resampling with async=1 for smooth playback
         
         // Keyframe management - CRITICAL: GOP must match segment duration for Roku
         // GOP = fps * segmentDuration ensures keyframes align with discontinuity tags
@@ -765,9 +776,9 @@ export class FFmpegEngine {
       
       try {
         const baselineContent = await fs.readFile(playlistPath, 'utf-8');
-        const segments = baselineContent.match(/stream_(\d+)\.ts/g) || [];
+        const segments = baselineContent.match(/stream_(\d+)\.m4s/g) || [];
         if (segments.length > 0) {
-          const lastSegMatch = segments[segments.length - 1].match(/stream_(\d+)\.ts/);
+          const lastSegMatch = segments[segments.length - 1].match(/stream_(\d+)\.m4s/);
           if (lastSegMatch) {
             baselineLastSegment = parseInt(lastSegMatch[1], 10);
           }
@@ -794,11 +805,11 @@ export class FFmpegEngine {
         // CRITICAL: Track segment number, not count! hls_list_size=30 keeps count constant!
         if (isTransition) {
           const content = await fs.readFile(playlistPath, 'utf-8');
-          const allSegments = content.match(/stream_(\d+)\.ts/g) || [];
-          
+          const allSegments = content.match(/stream_(\d+)\.m4s/g) || [];
+
           if (allSegments.length > 0) {
             // Get current last segment number
-            const lastSegMatch = allSegments[allSegments.length - 1].match(/stream_(\d+)\.ts/);
+            const lastSegMatch = allSegments[allSegments.length - 1].match(/stream_(\d+)\.m4s/);
             if (lastSegMatch) {
               const currentLastSegment = parseInt(lastSegMatch[1], 10);
               
@@ -810,7 +821,7 @@ export class FFmpegEngine {
                 
                 // Verify this segment actually exists in the playlist
                 const hasNewSegment = allSegments.some(seg => {
-                  const match = seg.match(/stream_(\d+)\.ts/);
+                  const match = seg.match(/stream_(\d+)\.m4s/);
                   return match && parseInt(match[1], 10) === firstNewSegmentNumber;
                 });
                 
@@ -861,7 +872,7 @@ export class FFmpegEngine {
 
         // For initial starts, verify at least 1 segment exists
         const content = await fs.readFile(playlistPath, 'utf-8');
-        const totalSegmentCount = (content.match(/stream_\d+\.ts/g) || []).length;
+        const totalSegmentCount = (content.match(/stream_\d+\.m4s/g) || []).length;
         if (totalSegmentCount >= 1) {
           logger.info(
             {

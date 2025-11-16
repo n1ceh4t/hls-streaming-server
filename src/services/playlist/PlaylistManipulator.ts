@@ -38,7 +38,7 @@ export class PlaylistManipulator {
       const line = lines[i];
 
       // Check if this is the target segment
-      const segmentMatch = line.match(/stream_(\d+)\.ts/);
+      const segmentMatch = line.match(/stream_(\d+).m4s/);
       if (segmentMatch && parseInt(segmentMatch[1], 10) === segmentNumber && !inserted) {
         // Find the EXTINF line immediately before this segment
         let extinfIndex = i - 1;
@@ -220,7 +220,7 @@ export class PlaylistManipulator {
    */
   public getSegmentNumbers(playlistContent: string): number[] {
     const segments: number[] = [];
-    const matches = playlistContent.matchAll(/stream_(\d+)\.ts/g);
+    const matches = playlistContent.matchAll(/stream_(\d+).m4s/g);
 
     for (const match of matches) {
       segments.push(parseInt(match[1], 10));

@@ -1173,7 +1173,7 @@ export class ChannelService {
       if (!isTransition) {
         try {
           const files = await fs.readdir(outputDir);
-          const segments = files.filter(f => f.endsWith('.ts') && f.startsWith('stream_'));
+          const segments = files.filter(f => f.endsWith('.m4s') && f.startsWith('stream_'));
           let deletedCount = 0;
           for (const segment of segments) {
             try {
@@ -2143,7 +2143,7 @@ export class ChannelService {
       // Read bumper segments
       const bumperFiles = await fs.readdir(segmentsDir);
       const bumperSegments = bumperFiles
-        .filter(f => f.endsWith('.ts'))
+        .filter(f => f.endsWith('.m4s'))
         .sort();
 
       if (bumperSegments.length === 0) {
@@ -2156,7 +2156,7 @@ export class ChannelService {
       try {
         playlistContent = await fs.readFile(playlistPath, 'utf-8');
         // Find the last segment number in the playlist
-        const segmentMatches = playlistContent.matchAll(/stream_(\d+)\.ts/g);
+        const segmentMatches = playlistContent.matchAll(/stream_(\d+).m4s/g);
         for (const match of segmentMatches) {
           const segNum = parseInt(match[1], 10);
           if (segNum > lastSegmentNumber) {
@@ -2178,7 +2178,7 @@ export class ChannelService {
         const bumperSegment = bumperSegments[i];
         const bumperSegmentPath = path.join(segmentsDir, bumperSegment);
         const newSegmentNumber = lastSegmentNumber + 1 + i;
-        const newSegmentName = `stream_${newSegmentNumber.toString().padStart(3, '0')}.ts`;
+        const newSegmentName = `stream_${newSegmentNumber.toString().padStart(3, '0')}.m4s`;
         const newSegmentPath = path.join(outputDir, newSegmentName);
 
         // Validate source segment size before copying
@@ -2309,7 +2309,7 @@ export class ChannelService {
       
       for (const file of files) {
         // Remove all .ts segments and .m3u8 playlists
-        if (file.endsWith('.ts') || file.endsWith('.m3u8')) {
+        if (file.endsWith('.m4s') || file.endsWith('.m3u8')) {
           try {
             await fs.unlink(path.join(outputDir, file));
             removedCount++;
@@ -2350,7 +2350,7 @@ export class ChannelService {
     // Generate/reuse single placeholder segment file
     const placeholderDir = path.join(config.paths.temp, 'bumpers', 'placeholders');
     await fs.mkdir(placeholderDir, { recursive: true });
-    const placeholderPath = path.join(placeholderDir, 'starting.ts');
+    const placeholderPath = path.join(placeholderDir, 'starting.m4s');
 
     // Generate placeholder if it doesn't exist
     const [width, height] = channel.config.resolution.split('x').map(Number);
@@ -2371,7 +2371,7 @@ export class ChannelService {
     }
 
     // Copy placeholder to channel output directory
-    const localPlaceholderName = 'starting.ts';
+    const localPlaceholderName = 'starting.m4s';
     const localPlaceholderPath = path.join(outputDir, localPlaceholderName);
     await fs.copyFile(placeholderPath, localPlaceholderPath);
 
@@ -2423,7 +2423,7 @@ export class ChannelService {
   private async _cleanupAllSegments_unused(channelId: string, outputDir: string): Promise<void> {
     try {
       const files = await fs.readdir(outputDir);
-      const segments = files.filter(f => f.endsWith('.ts') && f.startsWith('stream_'));
+      const segments = files.filter(f => f.endsWith('.m4s') && f.startsWith('stream_'));
 
       let deletedCount = 0;
       for (const segment of segments) {

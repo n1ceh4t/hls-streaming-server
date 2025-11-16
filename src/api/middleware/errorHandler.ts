@@ -16,7 +16,7 @@ export const errorHandler = (
   // Handle known application errors
   if (err instanceof AppError) {
     // Check if this is a streaming segment request
-    const isStreamingSegment = /^\/[^\/]+\/stream_\d+\.ts$/.test(req.path);
+    const isStreamingSegment = /^\/[^\/]+\/stream_\d+.m4s$/.test(req.path);
     
     // For streaming segments, 404s are common (segment not generated yet or cleaned up)
     // Don't log them as errors to avoid noise

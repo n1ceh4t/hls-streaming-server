@@ -203,5 +203,123 @@ export class SettingsService {
     }
     await this.setSetting('viewer_disconnect_grace_period', seconds.toString(), 'Seconds before pausing stream when no viewers');
   }
+
+  /**
+   * Get default video bitrate setting (with fallback to env var)
+   */
+  public async getVideoBitrate(): Promise<number> {
+    const value = await this.settingsRepository.get('default_video_bitrate');
+    if (value) {
+      const num = parseInt(value, 10);
+      if (!isNaN(num) && num > 0) {
+        return num;
+      }
+    }
+    return parseInt(process.env.DEFAULT_VIDEO_BITRATE || '1500000', 10);
+  }
+
+  /**
+   * Set default video bitrate
+   */
+  public async setVideoBitrate(bitrate: number): Promise<void> {
+    if (!Number.isInteger(bitrate) || bitrate <= 0) {
+      throw new Error('Video bitrate must be a positive integer (bps)');
+    }
+    await this.setSetting('default_video_bitrate', bitrate.toString(), 'Default video bitrate in bps (e.g., 1500000 = 1.5 Mbps)');
+  }
+
+  /**
+   * Get default audio bitrate setting (with fallback to env var)
+   */
+  public async getAudioBitrate(): Promise<number> {
+    const value = await this.settingsRepository.get('default_audio_bitrate');
+    if (value) {
+      const num = parseInt(value, 10);
+      if (!isNaN(num) && num > 0) {
+        return num;
+      }
+    }
+    return parseInt(process.env.DEFAULT_AUDIO_BITRATE || '128000', 10);
+  }
+
+  /**
+   * Set default audio bitrate
+   */
+  public async setAudioBitrate(bitrate: number): Promise<void> {
+    if (!Number.isInteger(bitrate) || bitrate <= 0) {
+      throw new Error('Audio bitrate must be a positive integer (bps)');
+    }
+    await this.setSetting('default_audio_bitrate', bitrate.toString(), 'Default audio bitrate in bps (e.g., 128000 = 128 kbps)');
+  }
+
+  /**
+   * Get default resolution setting (with fallback to env var)
+   */
+  public async getResolution(): Promise<string> {
+    const value = await this.settingsRepository.get('default_resolution');
+    if (value) {
+      return value;
+    }
+    return process.env.DEFAULT_RESOLUTION || '1920x1080';
+  }
+
+  /**
+   * Set default resolution
+   */
+  public async setResolution(resolution: string): Promise<void> {
+    // Validate format: WIDTHxHEIGHT
+    if (!/^\d+x\d+$/.test(resolution)) {
+      throw new Error('Resolution must be in format WIDTHxHEIGHT (e.g., 1920x1080)');
+    }
+    await this.setSetting('default_resolution', resolution, 'Default resolution in WIDTHxHEIGHT format (e.g., 1920x1080)');
+  }
+
+  /**
+   * Get default FPS setting (with fallback to env var)
+   */
+  public async getFps(): Promise<number> {
+    const value = await this.settingsRepository.get('default_fps');
+    if (value) {
+      const num = parseInt(value, 10);
+      if (!isNaN(num) && num >= 1 && num <= 120) {
+        return num;
+      }
+    }
+    return parseInt(process.env.DEFAULT_FPS || '30', 10);
+  }
+
+  /**
+   * Set default FPS
+   */
+  public async setFps(fps: number): Promise<void> {
+    if (!Number.isInteger(fps) || fps < 1 || fps > 120) {
+      throw new Error('FPS must be an integer between 1 and 120');
+    }
+    await this.setSetting('default_fps', fps.toString(), 'Default frames per second (1-120)');
+  }
+
+  /**
+   * Get default segment duration setting (with fallback to env var)
+   */
+  public async getSegmentDuration(): Promise<number> {
+    const value = await this.settingsRepository.get('default_segment_duration');
+    if (value) {
+      const num = parseInt(value, 10);
+      if (!isNaN(num) && num >= 1 && num <= 30) {
+        return num;
+      }
+    }
+    return parseInt(process.env.DEFAULT_SEGMENT_DURATION || '15', 10);
+  }
+
+  /**
+   * Set default segment duration
+   */
+  public async setSegmentDuration(duration: number): Promise<void> {
+    if (!Number.isInteger(duration) || duration < 1 || duration > 30) {
+      throw new Error('Segment duration must be an integer between 1 and 30 seconds');
+    }
+    await this.setSetting('default_segment_duration', duration.toString(), 'Default HLS segment duration in seconds (1-30)');
+  }
 }
 

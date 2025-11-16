@@ -15,6 +15,12 @@ const updateSettingsSchema = z.object({
   enableAutoScan: z.boolean().optional(),
   autoScanInterval: z.number().int().min(1).optional(),
   viewerDisconnectGracePeriod: z.number().int().positive().optional(),
+  // Streaming defaults
+  videoBitrate: z.number().int().positive().optional(),
+  audioBitrate: z.number().int().positive().optional(),
+  resolution: z.string().regex(/^\d+x\d+$/).optional(),
+  fps: z.number().int().min(1).max(120).optional(),
+  segmentDuration: z.number().int().min(1).max(30).optional(),
 });
 
 export const createSettingsRoutes = (authService?: AuthService) => {
@@ -65,6 +71,21 @@ export const createSettingsRoutes = (authService?: AuthService) => {
       }
       if (validated.viewerDisconnectGracePeriod !== undefined) {
         await settingsService.setViewerDisconnectGracePeriod(validated.viewerDisconnectGracePeriod);
+      }
+      if (validated.videoBitrate !== undefined) {
+        await settingsService.setVideoBitrate(validated.videoBitrate);
+      }
+      if (validated.audioBitrate !== undefined) {
+        await settingsService.setAudioBitrate(validated.audioBitrate);
+      }
+      if (validated.resolution !== undefined) {
+        await settingsService.setResolution(validated.resolution);
+      }
+      if (validated.fps !== undefined) {
+        await settingsService.setFps(validated.fps);
+      }
+      if (validated.segmentDuration !== undefined) {
+        await settingsService.setSegmentDuration(validated.segmentDuration);
       }
 
       const updatedSettings = await settingsService.getAllSettings();

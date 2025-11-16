@@ -182,7 +182,7 @@ export class BumperGenerator {
     // Check if segments already exist (reusable)
     try {
       const files = await fs.readdir(segmentsDir);
-      const segmentFiles = files.filter(f => f.endsWith('.ts')).sort();
+      const segmentFiles = files.filter(f => f.endsWith('.m4s')).sort();
       if (segmentFiles.length >= 2) {
         logger.debug({ segmentsDir, segmentCount: segmentFiles.length }, 'Stream starting segments already exist, reusing');
         return { segmentsDir, segmentCount: segmentFiles.length };
@@ -237,7 +237,7 @@ export class BumperGenerator {
     // Check if segments already exist (cache)
     try {
       const files = await fs.readdir(segmentsDir);
-      const segmentFiles = files.filter(f => f.endsWith('.ts')).sort();
+      const segmentFiles = files.filter(f => f.endsWith('.m4s')).sort();
       if (segmentFiles.length > 0) {
         logger.debug({ segmentsDir, segmentCount: segmentFiles.length }, 'Bumper segments already exist, reusing cached version');
         return { segmentsDir, segmentCount: segmentFiles.length };

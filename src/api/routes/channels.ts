@@ -5,8 +5,8 @@ import { LibraryService } from '../../services/library/LibraryService';
 import { MediaBucketService } from '../../services/bucket/MediaBucketService';
 import { VirtualTimeService } from '../../services/virtual-time/VirtualTimeService';
 import { ScheduleTimeService } from '../../services/schedule-time/ScheduleTimeService';
+import { SettingsService } from '../../services/settings/SettingsService';
 import { authenticate } from '../middleware/auth';
-import { config } from '../../config/env';
 import { z } from 'zod';
 
 const router = Router();
@@ -39,10 +39,13 @@ const updateScheduleTimeSchema = z.object({
   scheduleStartTime: z.string().datetime(),
 });
 
-export const createChannelRoutes = (channelService: ChannelService, authService?: AuthService, _libraryService?: LibraryService, bucketService?: MediaBucketService) => {
+export const createChannelRoutes = (channelService: ChannelService, authService?: AuthService, _libraryService?: LibraryService, bucketService?: MediaBucketService, settingsService?: SettingsService) => {
   const requireAuth = authenticate(authService);
   const virtualTimeService = new VirtualTimeService();
   const scheduleTimeService = new ScheduleTimeService();
+
+  // Create settings service if not provided
+  const settings = settingsService || new SettingsService();
 
   // Helper function to format duration in seconds to human-readable format
   function formatDuration(seconds: number): string {
@@ -141,14 +144,23 @@ export const createChannelRoutes = (channelService: ChannelService, authService?
     try {
       const validated = createChannelSchema.parse(req.body);
 
+      // Get defaults from database (with fallback to env vars)
+      const [videoBitrate, audioBitrate, resolution, fps, segmentDuration] = await Promise.all([
+        settings.getVideoBitrate(),
+        settings.getAudioBitrate(),
+        settings.getResolution(),
+        settings.getFps(),
+        settings.getSegmentDuration(),
+      ]);
+
       const channel = await channelService.createChannel({
         ...validated,
         outputDir: `./hls_output/${validated.slug}`,
-        videoBitrate: validated.videoBitrate || config.streaming.videoBitrate,
-        audioBitrate: validated.audioBitrate || config.streaming.audioBitrate,
-        resolution: validated.resolution || config.streaming.resolution,
-        fps: validated.fps || config.streaming.fps,
-        segmentDuration: validated.segmentDuration || config.streaming.segmentDuration,
+        videoBitrate: validated.videoBitrate || videoBitrate,
+        audioBitrate: validated.audioBitrate || audioBitrate,
+        resolution: validated.resolution || resolution,
+        fps: validated.fps || fps,
+        segmentDuration: validated.segmentDuration || segmentDuration,
         useDynamicPlaylist: validated.useDynamicPlaylist,
         includeBumpers: validated.includeBumpers,
       });

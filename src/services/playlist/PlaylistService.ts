@@ -248,9 +248,9 @@ export class PlaylistService {
         }
         
         // Find last segment number
-        const segments = existingContent.match(/stream_(\d+)\.ts/g) || [];
+        const segments = existingContent.match(/stream_(\d+).m4s/g) || [];
         if (segments.length > 0) {
-          const lastSegMatch = segments[segments.length - 1].match(/stream_(\d+)\.ts/);
+          const lastSegMatch = segments[segments.length - 1].match(/stream_(\d+).m4s/);
           if (lastSegMatch) {
             lastSegmentNumber = parseInt(lastSegMatch[1], 10);
           }
@@ -263,7 +263,7 @@ export class PlaylistService {
       // Read bumper segment files
       const bumperFiles = await fs.readdir(bumperInfo.segmentsDir);
       const bumperSegments = bumperFiles
-        .filter(f => f.endsWith('.ts') && f.startsWith('bumper_'))
+        .filter(f => f.endsWith('.m4s') && f.startsWith('bumper_'))
         .sort(); // Sort to ensure correct order
       
       if (bumperSegments.length === 0) {
@@ -293,7 +293,7 @@ export class PlaylistService {
             }
           }
         } else if (line.trim()) {
-          if (inSegments && line.includes('.ts')) {
+          if (inSegments && line.includes('.m4s')) {
             segmentLines.push(line);
           } else if (!inSegments) {
             headerLines.push(line);
@@ -328,7 +328,7 @@ export class PlaylistService {
 
       for (const line of segmentLines) {
         currentPair.push(line);
-        if (line.includes('.ts')) {
+        if (line.includes('.m4s')) {
           segmentPairs.push(currentPair);
           currentPair = [];
         }
@@ -341,9 +341,9 @@ export class PlaylistService {
         }
         // Update nextSegmentNumber based on last kept segment
         const lastPair = pairsToKeep[pairsToKeep.length - 1];
-        const tsLine = lastPair.find(l => l.includes('.ts'));
+        const tsLine = lastPair.find(l => l.includes('.m4s'));
         if (tsLine) {
-          const match = tsLine.match(/stream_(\d+)\.ts/);
+          const match = tsLine.match(/stream_(\d+).m4s/);
           if (match) {
             nextSegmentNumber = parseInt(match[1], 10) + 1;
           }
@@ -351,7 +351,7 @@ export class PlaylistService {
       }
       
       // Add bumper segments with correct numbering
-      // Bumper segments are served from the bumper directory, but referenced with stream_XXX.ts naming
+      // Bumper segments are served from the bumper directory, but referenced with stream_XXX.m4s naming
       const outputDir = path.dirname(playlistPath);
       const segmentDuration = targetDuration; // Use target duration from playlist
 
@@ -372,7 +372,7 @@ export class PlaylistService {
         const bumperFile = bumperSegments[i];
         const bumperPath = path.join(bumperInfo.segmentsDir, bumperFile);
         const segmentNumber = nextSegmentNumber + i;
-        const segmentName = `stream_${segmentNumber.toString().padStart(3, '0')}.ts`;
+        const segmentName = `stream_${segmentNumber.toString().padStart(3, '0')}.m4s`;
 
         // Copy bumper segment to output directory with correct name
         // This allows FFmpeg's append_list to continue from the correct segment number

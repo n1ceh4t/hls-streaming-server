@@ -84,7 +84,7 @@ class Application {
     // Request logging (exclude HLS streaming requests to reduce noise)
     this.app.use((req, _res, next) => {
       // Skip logging for HLS streaming requests (.m3u8 playlists and .ts segments)
-      const isStreamingRequest = req.path.endsWith('.m3u8') || req.path.endsWith('.ts');
+      const isStreamingRequest = req.path.endsWith('.m3u8') || req.path.endsWith('.m4s');
       if (!isStreamingRequest) {
         logger.info({ method: req.method, path: req.path }, 'Request received');
       }
@@ -207,7 +207,7 @@ class Application {
     this.app.set('bucketService', this.bucketService);
     
     // API routes
-    this.app.use('/api/channels', createChannelRoutes(this.channelService, this.authService, this.libraryService, this.bucketService));
+    this.app.use('/api/channels', createChannelRoutes(this.channelService, this.authService, this.libraryService, this.bucketService, this.settingsService));
 
     // Media bucket routes
     this.app.use('/', createBucketRoutes(this.bucketService, this.authService, this.channelService, this.epgService));
@@ -318,7 +318,7 @@ class Application {
           // append_list requires playlists to exist for segment numbering continuity
           let removedCount = 0;
           for (const file of files) {
-            if (file.endsWith('.ts')) {
+            if (file.endsWith('.m4s')) {
               await fs.unlink(path.join(outputDir, file));
               removedCount++;
             }
