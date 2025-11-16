@@ -348,9 +348,11 @@ export class PlaylistResolver implements IPlaylistResolver {
             }
           } else if (playbackMode === 'shuffle') {
             // Shuffle: randomize order once, then play sequentially
-            // Use a deterministic shuffle based on block ID to maintain consistency
-            mediaIds = this.shuffleArray([...mediaIds], activeBlock.id);
-            logger.debug({ channelId, bucketId: activeBlock.bucket_id }, 'Applied shuffle playback mode');
+            // Use a deterministic shuffle based on date + block ID so it changes daily
+            const dateStr = lookupTime.toISOString().split('T')[0]; // YYYY-MM-DD
+            const dailySeed = `${dateStr}-${activeBlock.id}`;
+            mediaIds = this.shuffleArray([...mediaIds], dailySeed);
+            logger.debug({ channelId, bucketId: activeBlock.bucket_id, dailySeed }, 'Applied shuffle playback mode with daily seed');
           } else if (playbackMode === 'random') {
             // Random: shuffle each time (no progression tracking)
             mediaIds = this.shuffleArray([...mediaIds]);
