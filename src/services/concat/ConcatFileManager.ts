@@ -137,13 +137,44 @@ export class ConcatFileManager {
 
       // Add bumper after each file (except the last one)
       // The bumper file will be regenerated with fresh content when each episode starts
-      // Only include bumper if it exists (to prevent FFmpeg from crashing if generation fails)
+      // Only include bumper if it exists and is valid (to prevent FFmpeg from crashing if generation fails)
       if (i < mediaFiles.length - 1) {
         try {
+          // Verify file exists
           await fs.access(bumperPath);
-          const escapedBumperPath = this.escapePathForConcat(bumperPath);
-          // Using unquoted paths (with -safe 0) to avoid single quote escaping bugs
-          lines.push(`file ${escapedBumperPath}`);
+          
+          // Verify file is not empty and has reasonable size (at least 1KB)
+          const stats = await fs.stat(bumperPath);
+          const minSize = 1024; // 1KB minimum
+          if (stats.size < minSize) {
+            logger.warn(
+              { channelId, bumperPath, fileIndex: i, size: stats.size },
+              'Bumper file exists but is too small (possible corruption), skipping in concat file'
+            );
+          } else {
+            // Check if temp file exists (indicates ongoing write)
+            // Temp files have pattern: bumper.mp4.tmp.{timestamp}
+            try {
+              const dir = path.dirname(bumperPath);
+              const bumperBasename = path.basename(bumperPath);
+              const files = await fs.readdir(dir);
+              const hasTempFile = files.some(f => f.startsWith(bumperBasename + '.tmp.'));
+              if (hasTempFile) {
+                logger.warn(
+                  { channelId, bumperPath, fileIndex: i },
+                  'Bumper file is being written (temp file exists), skipping in concat file to avoid corruption'
+                );
+              } else {
+                const escapedBumperPath = this.escapePathForConcat(bumperPath);
+                // Using unquoted paths (with -safe 0) to avoid single quote escaping bugs
+                lines.push(`file ${escapedBumperPath}`);
+              }
+            } catch {
+              // Can't check for temp files, but main file exists and is valid - include it
+              const escapedBumperPath = this.escapePathForConcat(bumperPath);
+              lines.push(`file ${escapedBumperPath}`);
+            }
+          }
         } catch {
           // Bumper doesn't exist yet - skip it (will be added when generated)
           logger.warn(

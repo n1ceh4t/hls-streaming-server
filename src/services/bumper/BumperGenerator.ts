@@ -287,18 +287,23 @@ export class BumperGenerator {
       videoBitrate: number;
       audioBitrate: number;
     },
-    outputPath: string
+    outputPath: string,
+    retryCount: number = 0
   ): Promise<string> {
     const { showName, episodeName, duration, resolution, fps, videoBitrate, audioBitrate } = config;
     
     logger.info(
-      { showName, episodeName, duration, outputPath },
+      { showName, episodeName, duration, outputPath, retryCount },
       'Generating bumper MP4 file for concat'
     );
 
     // Ensure output directory exists BEFORE starting FFmpeg
     const outputDir = path.dirname(outputPath);
     await fs.mkdir(outputDir, { recursive: true });
+
+    // CRITICAL: Use atomic write - write to temp file first, then rename
+    // This prevents FFmpeg from reading a partially-written file
+    const tempPath = `${outputPath}.tmp.${Date.now()}`;
 
     // Parse resolution
     const [width, height] = resolution.split('x').map(Number);
@@ -361,6 +366,7 @@ export class BumperGenerator {
       
       // FFmpeg command
       // Map video from filter complex [v] (filter graph output) and audio from input 1:a (input stream, no brackets)
+      // CRITICAL: Write to temp file first for atomic operation
       const ffmpegArgs = [
         ...args,
         '-filter_complex', filterComplex.join(';'),
@@ -374,7 +380,7 @@ export class BumperGenerator {
         '-r', safeFps.toString(),
         '-t', safeDuration.toString(),
         '-y', // Overwrite output file
-        outputPath
+        tempPath  // Write to temp file first
       ];
       
       // Use imported envConfig (not the function parameter 'config')
@@ -417,36 +423,135 @@ export class BumperGenerator {
         
         if (code === 0) {
           try {
+            // Verify temp file exists and has valid size
+            const tempStats = await fs.stat(tempPath);
+            const minSize = 1024; // At least 1KB
+            if (tempStats.size < minSize) {
+              throw new Error(`Generated bumper file is too small (${tempStats.size} bytes), possible corruption`);
+            }
+
+            // ATOMIC OPERATION: Rename temp file to final path
+            // This is atomic on most filesystems and prevents FFmpeg from reading partial files
+            await fs.rename(tempPath, outputPath);
+            
+            // Verify final file exists
             const stats = await fs.stat(outputPath);
             logger.info(
-              { outputPath, sizeMB: (stats.size / 1024 / 1024).toFixed(2) },
-              'Bumper MP4 generated successfully'
+              { outputPath, sizeMB: (stats.size / 1024 / 1024).toFixed(2), wasRetry: retryCount > 0 },
+              'Bumper MP4 generated and atomically written successfully'
             );
             hasResolved = true;
             resolve(outputPath);
           } catch (error) {
+            // Clean up temp file if it exists
+            try {
+              await fs.unlink(tempPath).catch(() => {});
+            } catch {
+              // Ignore cleanup errors
+            }
+            
             hasResolved = true;
-            reject(new Error(`Failed to verify bumper MP4: ${error}`));
+            const errorMsg = `Failed to verify or finalize bumper MP4: ${error}`;
+            
+            // Retry logic: retry up to 2 times with exponential backoff
+            const maxRetries = 2;
+            if (retryCount < maxRetries) {
+              const retryDelay = Math.pow(2, retryCount) * 1000; // 1s, 2s
+              logger.warn(
+                { outputPath, retryCount, nextRetryIn: retryDelay, error: errorMsg },
+                'Bumper generation failed, will retry'
+              );
+              
+              setTimeout(async () => {
+                try {
+                  const result = await this.generateBumperMP4(config, outputPath, retryCount + 1);
+                  resolve(result);
+                } catch (retryError) {
+                  reject(retryError);
+                }
+              }, retryDelay);
+            } else {
+              logger.error({ outputPath, retryCount, error: errorMsg }, 'Bumper MP4 generation failed after retries');
+              reject(new Error(errorMsg));
+            }
           }
         } else {
+          // Clean up temp file if it exists
+          try {
+            await fs.unlink(tempPath).catch(() => {});
+          } catch {
+            // Ignore cleanup errors
+          }
+          
           hasResolved = true;
           const error = new Error(`FFmpeg exited with code ${code}: ${stderr.substring(stderr.length - 500)}`);
-          logger.error({ 
-            error, 
-            outputPath, 
-            exitCode: code, 
-            stderr: stderr.substring(stderr.length - 500),
-            ffmpegArgs: ffmpegArgs.slice(0, 10) // Log first 10 args for debugging
-          }, 'Bumper MP4 generation FFmpeg error');
-          reject(error);
+          
+          // Retry logic for FFmpeg errors
+          const maxRetries = 2;
+          if (retryCount < maxRetries && code !== 1) { // Don't retry on code 1 (usually user cancellation)
+            const retryDelay = Math.pow(2, retryCount) * 1000;
+            logger.warn(
+              { outputPath, retryCount, nextRetryIn: retryDelay, exitCode: code },
+              'Bumper generation FFmpeg error, will retry'
+            );
+            
+            setTimeout(async () => {
+              try {
+                const result = await this.generateBumperMP4(config, outputPath, retryCount + 1);
+                resolve(result);
+              } catch (retryError) {
+                reject(retryError);
+              }
+            }, retryDelay);
+          } else {
+            logger.error({ 
+              error, 
+              outputPath, 
+              exitCode: code, 
+              retryCount,
+              stderr: stderr.substring(stderr.length - 500),
+              ffmpegArgs: ffmpegArgs.slice(0, 10) // Log first 10 args for debugging
+            }, 'Bumper MP4 generation FFmpeg error (no more retries)');
+            reject(error);
+          }
         }
       });
       
-      ffmpegProcess.on('error', (error) => {
+      ffmpegProcess.on('error', async (error) => {
         clearTimeout(timeoutId);
+        
+        // Clean up temp file if it exists
+        try {
+          await fs.unlink(tempPath).catch(() => {});
+        } catch {
+          // Ignore cleanup errors
+        }
+        
         if (!hasResolved) {
           hasResolved = true;
-          reject(new Error(`FFmpeg process error: ${error}`));
+          const errorMsg = `FFmpeg process error: ${error}`;
+          
+          // Retry logic for process errors
+          const maxRetries = 2;
+          if (retryCount < maxRetries) {
+            const retryDelay = Math.pow(2, retryCount) * 1000;
+            logger.warn(
+              { outputPath, retryCount, nextRetryIn: retryDelay, error: errorMsg },
+              'Bumper generation process error, will retry'
+            );
+            
+            setTimeout(async () => {
+              try {
+                const result = await this.generateBumperMP4(config, outputPath, retryCount + 1);
+                resolve(result);
+              } catch (retryError) {
+                reject(retryError);
+              }
+            }, retryDelay);
+          } else {
+            logger.error({ outputPath, retryCount, error: errorMsg }, 'Bumper generation process error (no more retries)');
+            reject(new Error(errorMsg));
+          }
         }
       });
     });

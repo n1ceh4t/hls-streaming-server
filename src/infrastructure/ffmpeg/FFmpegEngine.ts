@@ -479,10 +479,23 @@ export class FFmpegEngine {
     
     // Prepare input options
     const inputOptions: string[] = [
-      '-fflags', '+genpts+igndts+flush_packets', // Critical for different codecs
+      // CRITICAL: Timestamp and codec transition handling
+      // genpts: Generate new PTS when missing (critical for concat with different codecs)
+      // igndts: Ignore DTS timestamps (prevents timestamp conflicts during transitions)
+      // flush_packets: Flush decoder when switching inputs (critical for codec transitions)
+      '-fflags', '+genpts+igndts+flush_packets',
       '-avoid_negative_ts', 'make_zero', // Handle timestamp issues
+      
+      // Codec detection and error resilience
       '-analyzeduration', '10000000', // 10 seconds - better codec detection
       '-probesize', '10000000', // Larger probe size for better detection
+      '-err_detect', 'ignore_err', // Ignore decoder errors and continue (prevents crashes on corrupted frames)
+      '-max_interleave_delta', '0', // Prevent interleaving issues during codec transitions
+      
+      // CRITICAL: Add extra resilience for concat demuxer transitions
+      // These help FFmpeg handle codec changes (HEVC -> H.264) and file boundaries
+      '-fpsprobesize', '0', // Don't probe frame rate (faster, prevents issues with mixed codecs)
+      '-thread_queue_size', '512', // Larger thread queue for smoother transitions
     ];
     
     // Hardware acceleration (before seek position)
@@ -557,7 +570,9 @@ export class FFmpegEngine {
         // Using lanczos resampling algorithm for better quality when upscaling
         // flags=lanczos provides better quality than default (bicubic) for upscaling
         // DAR calculated dynamically from resolution (not hardcoded to 16:9)
-        '-vf', `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p,setdar=${darWidth}/${darHeight}`,
+        // CRITICAL: Add fps filter to normalize frame rate during codec transitions
+        // This ensures smooth transitions between files with different native frame rates
+        '-vf', `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p,fps=${streamConfig.fps},setdar=${darWidth}/${darHeight}`,
         
         // HLS Output Settings
         '-f', 'hls',
@@ -626,6 +641,12 @@ export class FFmpegEngine {
         '-max_muxing_queue_size', '8192', // Much larger muxing queue for stability
         '-strict', '-2',
         
+        // CRITICAL: Additional settings for smooth codec transitions
+        // These help FFmpeg handle transitions between different input codecs (HEVC, H.264, etc.)
+        '-vsync', 'cfr', // Constant frame rate output (matches fps_mode cfr)
+        '-async_depth', '1', // Minimize audio/video sync issues during transitions
+        // Note: genpts in input options handles timestamp continuity, no need for copyts
+        
         // Threading optimization (only for CPU encoding, hardware handles its own)
         ...(config.ffmpeg.hwAccel === 'none' ? ['-threads', '0', '-thread_type', 'slice'] : []),
         
@@ -644,10 +665,17 @@ export class FFmpegEngine {
   private setupEventHandlers(channelId: string, command: FfmpegCommand, handle: StreamHandle): void {
     // Buffer stderr lines to capture error details
     const stderrLines: string[] = [];
+    
+    // Rate limiting for repeated errors (prevent log flooding)
+    const errorCounts: Map<string, { count: number; firstSeen: number; lastLogged: number }> = new Map();
+    const RATE_LIMIT_WINDOW = 5000; // 5 seconds
+    const RATE_LIMIT_THRESHOLD = 10; // Log every 10th occurrence after first
 
     command
       .on('start', (commandLine) => {
         logger.info({ channelId, commandLine }, 'FFmpeg command started');
+        // Clear error counts when starting new stream
+        errorCounts.clear();
       })
       .on('progress', async (progress) => {
         logger.debug({ channelId, progress }, 'FFmpeg progress');
@@ -667,14 +695,47 @@ export class FFmpegEngine {
             /VBV underflow/i, // Video buffer underflow (common, non-fatal)
             /deprecated pixel format/i,
             /Past duration/i, // PTS/DTS warnings
+            // HEVC/H.265 decoder errors - FFmpeg recovers from these, but they indicate corrupted NAL units
+            /\[hevc.*\]\s*(Invalid NAL unit size|Error splitting the input into NAL units)/i,
+            /\[h264.*\]\s*(Invalid NAL unit size|Error splitting the input into NAL units)/i,
           ];
           
           const isNonFatal = nonFatalPatterns.some(pattern => pattern.test(l));
           if (isNonFatal) {
-            // Still capture for debugging, but don't log as warning
-            // Note: Audio decoder errors may cause that specific stream to be skipped
-            // FFmpeg will use other audio streams if available, or continue with video only
-            logger.debug({ channelId, line: l }, '[ffmpeg stderr] (non-fatal)');
+            // Rate limit repeated codec errors to prevent log flooding
+            const now = Date.now();
+            const errorKey = l.substring(0, 100); // Use first 100 chars as key
+            const errorInfo = errorCounts.get(errorKey);
+            
+            if (errorInfo) {
+              errorInfo.count++;
+              // Log first occurrence, then every Nth occurrence, or if window expired
+              const shouldLog = 
+                errorInfo.count === 1 || 
+                errorInfo.count % RATE_LIMIT_THRESHOLD === 0 ||
+                (now - errorInfo.lastLogged) > RATE_LIMIT_WINDOW;
+              
+              if (shouldLog) {
+                errorInfo.lastLogged = now;
+                if (errorInfo.count === 1) {
+                  logger.debug(
+                    { channelId, line: l, note: 'Codec decoder warning (FFmpeg will recover, may indicate corrupted file)' },
+                    '[ffmpeg stderr] (non-fatal codec warning)'
+                  );
+                } else {
+                  logger.debug(
+                    { channelId, line: l, count: errorInfo.count, note: `Repeated ${errorInfo.count} times (rate limited)` },
+                    '[ffmpeg stderr] (non-fatal codec warning, repeated)'
+                  );
+                }
+              }
+            } else {
+              errorCounts.set(errorKey, { count: 1, firstSeen: now, lastLogged: now });
+              logger.debug(
+                { channelId, line: l, note: 'Codec decoder warning (FFmpeg will recover, may indicate corrupted file)' },
+                '[ffmpeg stderr] (non-fatal codec warning)'
+              );
+            }
             return;
           }
           
@@ -719,9 +780,41 @@ export class FFmpegEngine {
         
         // SIGTERM/SIGKILL are normal terminations (we initiated them)
         // Exit code 255 is an error, not normal termination
-        if (errorSignal === 'SIGTERM' || errorSignal === 'SIGKILL') {
-          logger.debug({ channelId, signal: errorSignal }, 'FFmpeg terminated normally');
+        // Exit code 123 is hard exit after multiple signals (during shutdown)
+        const isNormalTermination = errorSignal === 'SIGTERM' || errorSignal === 'SIGKILL';
+        const isShutdownExit = errorCode === 123 && (err.message?.includes('system signals') || fullStderr.includes('system signals'));
+        
+        if (isNormalTermination || isShutdownExit) {
+          // During shutdown, "frames duplicated" is just a warning from video filter, not an error
+          const hasFramesDuplicatedWarning = fullStderr.toLowerCase().includes('frames duplicated');
+          if (hasFramesDuplicatedWarning && isShutdownExit) {
+            logger.debug(
+              { channelId, signal: errorSignal, errorCode, note: 'Frames duplicated warning during shutdown is normal' },
+              'FFmpeg terminated during shutdown (frames duplicated warning is expected)'
+            );
+          } else {
+            logger.debug({ channelId, signal: errorSignal, errorCode }, 'FFmpeg terminated normally');
+          }
         } else {
+          // Detect specific error types from stderr
+          const stderrLower = fullStderr.toLowerCase();
+          
+          // "frames duplicated" is only an error if it's NOT during shutdown
+          // During normal operation, it indicates a video filter issue (possibly from corrupted input)
+          const hasFramesDuplicated = stderrLower.includes('frames duplicated');
+          const isBumperError = 
+            (stderrLower.includes('no such file') && stderrLower.includes('bumper')) ||
+            (hasFramesDuplicated && !isShutdownExit) || // Only treat as error if not during shutdown
+            stderrLower.includes('invalid data found') ||
+            stderrLower.includes('error while decoding') ||
+            (errorCode === 255 && stderrLower.includes('concat'));
+          
+          const isFileError = 
+            stderrLower.includes('no such file') ||
+            stderrLower.includes('cannot find') ||
+            stderrLower.includes('invalid argument') ||
+            stderrLower.includes('i/o error');
+          
           // Exit code 255 typically means FFmpeg command syntax error or file issue
           logger.error(
             {
@@ -731,25 +824,54 @@ export class FFmpegEngine {
               errorSignal,
               errorMessage: err.message,
               inputFile: handle.config.inputFile,
+              concatFile: handle.config.concatFile,
+              isBumperError,
+              isFileError,
+              hasFramesDuplicated,
+              isShutdownExit,
               stdout: fullStdout || '(empty)',
               stderr: fullStderr || '(empty)',
               stderrLast50Lines: stderrLines.slice(-50).join('\n'),
             },
-            'FFmpeg error'
+            isBumperError ? 'FFmpeg error (likely bumper-related)' : 'FFmpeg error'
           );
+          
+          // If this is a bumper-related error and we're using concat, try to recover
+          if (isBumperError && handle.config.concatFile) {
+            logger.warn(
+              { channelId, concatFile: handle.config.concatFile },
+              'Detected bumper-related FFmpeg error - this may indicate corrupted or missing bumper file'
+            );
+          }
         }
         
         this.activeStreams.delete(channelId);
 
         // On error (not normal termination), try to transition to next file if callback exists
         // This allows recovery from codec issues, missing files, etc.
-        if (errorSignal !== 'SIGTERM' && errorSignal !== 'SIGKILL' && handle.onFileEnd) {
-          logger.info({ channelId, errorCode, errorSignal }, 'FFmpeg error, attempting to transition to next file');
-          setTimeout(() => {
-            if (handle.onFileEnd) {
-              handle.onFileEnd();
-            }
-          }, 1000);
+        // For concat files, we don't have onFileEnd callback, so we need different recovery
+        if (errorSignal !== 'SIGTERM' && errorSignal !== 'SIGKILL') {
+          if (handle.onFileEnd) {
+            // Legacy single-file mode - use callback
+            logger.info({ channelId, errorCode, errorSignal }, 'FFmpeg error, attempting to transition to next file');
+            setTimeout(() => {
+              if (handle.onFileEnd) {
+                handle.onFileEnd();
+              }
+            }, 1000);
+          } else if (handle.config.concatFile) {
+            // Concat mode - need to notify ChannelService to restart stream
+            // ChannelService will detect the stream stopped and can restart it
+            logger.warn(
+              { 
+                channelId, 
+                errorCode, 
+                errorSignal,
+                note: 'Stream stopped due to error - ChannelService should detect and restart if viewers are present'
+              },
+              'FFmpeg error in concat mode - stream stopped'
+            );
+          }
         }
       });
   }
