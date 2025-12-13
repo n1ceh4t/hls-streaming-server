@@ -14,6 +14,8 @@ export interface ChannelRow {
   auto_start: boolean;
   use_dynamic_playlist: boolean | null;
   include_bumpers: boolean | null;
+  watermark_image_base64: string | null;
+  watermark_position: string | null;
   state: string;
   current_index: number;
   viewer_count: number;
@@ -44,6 +46,8 @@ export interface ChannelUpdateData {
   use_dynamic_playlist?: boolean;
   include_bumpers?: boolean;
   auto_start?: boolean;
+  watermark_image_base64?: string | null;
+  watermark_position?: string | null;
 }
 
 /**
@@ -59,11 +63,12 @@ export class ChannelRepository {
     await Database.query(
       `INSERT INTO channels (
         id, name, slug, output_dir, video_bitrate, audio_bitrate,
-        resolution, fps, segment_duration, auto_start, use_dynamic_playlist, include_bumpers, state,
+        resolution, fps, segment_duration, auto_start, use_dynamic_playlist, include_bumpers, 
+        watermark_image_base64, watermark_position, state,
         current_index, viewer_count, virtual_start_time,
         total_virtual_seconds, virtual_current_index, virtual_position_in_file, schedule_start_time
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
       )`,
       [
         channel.id,
@@ -78,6 +83,8 @@ export class ChannelRepository {
         config.autoStart || false,
         config.useDynamicPlaylist || false,
         config.includeBumpers !== false, // Default to true for backward compatibility (undefined/null → true)
+        config.watermarkImageBase64 || null,
+        config.watermarkPosition || null,
         channel.getState(),
         channel.getMetadata().currentIndex,
         channel.getMetadata().viewerCount,
@@ -184,6 +191,14 @@ export class ChannelRepository {
       updates.push(`auto_start = $${paramIndex++}`);
       values.push(data.auto_start);
     }
+    if (data.watermark_image_base64 !== undefined) {
+      updates.push(`watermark_image_base64 = $${paramIndex++}`);
+      values.push(data.watermark_image_base64);
+    }
+    if (data.watermark_position !== undefined) {
+      updates.push(`watermark_position = $${paramIndex++}`);
+      values.push(data.watermark_position);
+    }
 
     if (updates.length === 0) {
       return; // No updates
@@ -221,6 +236,8 @@ export class ChannelRepository {
       autoStart: row.auto_start,
       useDynamicPlaylist: row.use_dynamic_playlist || false,
       includeBumpers: row.include_bumpers !== false, // Default to true if null for backward compatibility
+      watermarkImageBase64: row.watermark_image_base64 || undefined,
+      watermarkPosition: (row.watermark_position as 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center') || undefined,
     };
 
     const channel = new Channel(config, row.id, row.state as ChannelState, {

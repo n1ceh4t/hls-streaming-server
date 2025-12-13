@@ -3555,6 +3555,39 @@
                             <button class="btn btn-small btn-success" onclick="updateChannelSettings('${channelId}')">Save Settings</button>
                         </div>
                         
+                        <h4 style="color: var(--text-primary); margin-bottom: 10px; margin-top: 30px;">Watermark</h4>
+                        <div style="background: var(--bg-tertiary); padding: 15px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px; color: var(--text-primary);">Watermark Image (PNG with transparency):</label>
+                                <input type="file" id="manageChannelWatermarkFile" accept="image/png" 
+                                       style="width: 100%; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius);"
+                                       onchange="handleWatermarkUpload(event, '${channelId}')">
+                                <small style="color: var(--text-muted); display: block; margin-top: 4px;">Upload a PNG image with transparency. Recommended size: 200-400px width.</small>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 5px; color: var(--text-primary);">Position:</label>
+                                <select id="manageChannelWatermarkPosition" 
+                                        style="width: 100%; padding: 8px; background: var(--bg-secondary); border: 1px solid var(--border); color: var(--text-primary); border-radius: var(--radius);">
+                                    <option value="top-left" ${channel.config.watermarkPosition === 'top-left' ? 'selected' : ''}>Top Left</option>
+                                    <option value="top-right" ${channel.config.watermarkPosition === 'top-right' ? 'selected' : ''}>Top Right</option>
+                                    <option value="bottom-left" ${channel.config.watermarkPosition === 'bottom-left' ? 'selected' : ''}>Bottom Left</option>
+                                    <option value="bottom-right" ${channel.config.watermarkPosition === 'bottom-right' ? 'selected' : ''}>Bottom Right</option>
+                                    <option value="center" ${channel.config.watermarkPosition === 'center' ? 'selected' : ''}>Center</option>
+                                </select>
+                            </div>
+                            <div id="manageChannelWatermarkPreview" style="margin-bottom: 15px; ${channel.config.watermarkImageBase64 ? '' : 'display: none;'}">
+                                <label style="display: block; margin-bottom: 5px; color: var(--text-primary);">Preview:</label>
+                                <div style="background: var(--bg-secondary); padding: 10px; border-radius: var(--radius); border: 1px solid var(--border); display: inline-block;">
+                                    <img id="manageChannelWatermarkPreviewImg" 
+                                         src="${channel.config.watermarkImageBase64 ? 'data:image/png;base64,' + channel.config.watermarkImageBase64 : ''}" 
+                                         style="max-width: 200px; max-height: 100px; display: block;"
+                                         alt="Watermark preview">
+                                </div>
+                                <button class="btn btn-small btn-danger" onclick="removeWatermark('${channelId}')" style="margin-top: 8px;">Remove Watermark</button>
+                            </div>
+                            <button class="btn btn-small btn-success" onclick="updateWatermarkSettings('${channelId}')">Save Watermark</button>
+                        </div>
+                        
                         <h4 style="color: var(--text-primary); margin-bottom: 10px; margin-top: 30px;">Schedule Time</h4>
                         <div style="background: var(--bg-tertiary); padding: 15px; border-radius: var(--radius-lg); margin-bottom: 20px; border: 1px solid var(--border);">
                             <div class="form-group" style="margin-bottom: 15px;">
@@ -3868,6 +3901,135 @@
             } catch (error) {
                 alert('Network error. Please try again.');
                 console.error('Failed to update channel settings:', error);
+            }
+        }
+
+        function handleWatermarkUpload(event, channelId) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            // Validate file type
+            if (file.type !== 'image/png') {
+                alert('Please upload a PNG image file.');
+                event.target.value = '';
+                return;
+            }
+
+            // Validate file size (max 2MB)
+            if (file.size > 2 * 1024 * 1024) {
+                alert('Image file is too large. Maximum size is 2MB.');
+                event.target.value = '';
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const base64 = e.target.result.split(',')[1]; // Remove data:image/png;base64, prefix
+                
+                // Update preview
+                const previewImg = document.getElementById('manageChannelWatermarkPreviewImg');
+                const previewDiv = document.getElementById('manageChannelWatermarkPreview');
+                if (previewImg && previewDiv) {
+                    previewImg.src = e.target.result;
+                    previewDiv.style.display = 'block';
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function updateWatermarkSettings(channelId) {
+            try {
+                const position = document.getElementById('manageChannelWatermarkPosition').value;
+                const fileInput = document.getElementById('manageChannelWatermarkFile');
+                
+                let watermarkImageBase64 = null;
+                
+                // If a new file was selected, read it
+                if (fileInput.files && fileInput.files[0]) {
+                    const file = fileInput.files[0];
+                    if (file.type !== 'image/png') {
+                        alert('Please upload a PNG image file.');
+                        return;
+                    }
+                    
+                    watermarkImageBase64 = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            const base64 = e.target.result.split(',')[1]; // Remove data:image/png;base64, prefix
+                            resolve(base64);
+                        };
+                        reader.onerror = reject;
+                        reader.readAsDataURL(file);
+                    });
+                } else {
+                    // Use existing watermark if no new file selected
+                    const previewImg = document.getElementById('manageChannelWatermarkPreviewImg');
+                    if (previewImg && previewImg.src && previewImg.src.startsWith('data:')) {
+                        watermarkImageBase64 = previewImg.src.split(',')[1];
+                    }
+                }
+
+                const res = await fetch(`${API_BASE}/api/channels/${channelId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        watermarkImageBase64,
+                        watermarkPosition: position,
+                    }),
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Watermark settings updated successfully!');
+                    // Clear file input
+                    fileInput.value = '';
+                    // Refresh the modal
+                    const modal = document.querySelector('.admin-modal');
+                    if (modal) {
+                        const channelName = modal.querySelector('h3').textContent.replace('Manage Channel: ', '');
+                        manageChannel(channelId, channelName);
+                    }
+                } else {
+                    alert(data.error?.message || 'Failed to update watermark settings');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to update watermark settings:', error);
+            }
+        }
+
+        async function removeWatermark(channelId) {
+            if (!confirm('Are you sure you want to remove the watermark?')) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API_BASE}/api/channels/${channelId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        watermarkImageBase64: null,
+                        watermarkPosition: null,
+                    }),
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Watermark removed successfully!');
+                    // Refresh the modal
+                    const modal = document.querySelector('.admin-modal');
+                    if (modal) {
+                        const channelName = modal.querySelector('h3').textContent.replace('Manage Channel: ', '');
+                        manageChannel(channelId, channelName);
+                    }
+                } else {
+                    alert(data.error?.message || 'Failed to remove watermark');
+                }
+            } catch (error) {
+                alert('Network error. Please try again.');
+                console.error('Failed to remove watermark:', error);
             }
         }
 

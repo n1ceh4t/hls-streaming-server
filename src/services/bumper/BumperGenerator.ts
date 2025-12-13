@@ -303,7 +303,10 @@ export class BumperGenerator {
 
     // CRITICAL: Use atomic write - write to temp file first, then rename
     // This prevents FFmpeg from reading a partially-written file
-    const tempPath = `${outputPath}.tmp.${Date.now()}`;
+    // Insert timestamp before .mp4 extension so FFmpeg recognizes the format
+    const ext = path.extname(outputPath);
+    const baseName = path.basename(outputPath, ext);
+    const tempPath = path.join(outputDir, `${baseName}.tmp.${Date.now()}${ext}`);
 
     // Parse resolution
     const [width, height] = resolution.split('x').map(Number);

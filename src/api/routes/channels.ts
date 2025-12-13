@@ -33,6 +33,8 @@ const updateChannelSchema = z.object({
   useDynamicPlaylist: z.boolean().optional(),
   includeBumpers: z.boolean().optional(),
   autoStart: z.boolean().optional(),
+  watermarkImageBase64: z.string().nullable().optional(),
+  watermarkPosition: z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center']).nullable().optional(),
 });
 
 const updateScheduleTimeSchema = z.object({
@@ -266,7 +268,13 @@ export const createChannelRoutes = (channelService: ChannelService, authService?
       const { channelId } = req.params;
       const validated = updateChannelSchema.parse(req.body);
       
-      await channelService.updateChannelConfig(channelId, validated);
+      await channelService.updateChannelConfig(channelId, {
+        useDynamicPlaylist: validated.useDynamicPlaylist,
+        includeBumpers: validated.includeBumpers,
+        autoStart: validated.autoStart,
+        watermarkImageBase64: validated.watermarkImageBase64,
+        watermarkPosition: validated.watermarkPosition,
+      });
 
       const channel = await channelService.getChannel(channelId);
       res.json({

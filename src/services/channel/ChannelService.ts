@@ -310,7 +310,13 @@ export class ChannelService {
   /**
    * Update channel configuration
    */
-  public async updateChannelConfig(channelId: string, updates: { useDynamicPlaylist?: boolean; includeBumpers?: boolean; autoStart?: boolean }): Promise<void> {
+  public async updateChannelConfig(channelId: string, updates: { 
+    useDynamicPlaylist?: boolean; 
+    includeBumpers?: boolean; 
+    autoStart?: boolean;
+    watermarkImageBase64?: string | null;
+    watermarkPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center' | null;
+  }): Promise<void> {
     const channel = await this.getChannel(channelId);
     
     // Update database
@@ -318,6 +324,8 @@ export class ChannelService {
       use_dynamic_playlist: updates.useDynamicPlaylist,
       include_bumpers: updates.includeBumpers,
       auto_start: updates.autoStart,
+      watermark_image_base64: updates.watermarkImageBase64,
+      watermark_position: updates.watermarkPosition,
     });
     
     // Update in-memory channel config
@@ -329,6 +337,12 @@ export class ChannelService {
     }
     if (updates.autoStart !== undefined) {
       channel.config.autoStart = updates.autoStart;
+    }
+    if (updates.watermarkImageBase64 !== undefined) {
+      channel.config.watermarkImageBase64 = updates.watermarkImageBase64 || undefined;
+    }
+    if (updates.watermarkPosition !== undefined) {
+      channel.config.watermarkPosition = updates.watermarkPosition || undefined;
     }
     
     // Update cache
@@ -1455,6 +1469,8 @@ export class ChannelService {
         // startPosition is handled by inpoint in the concat file, so we don't need -ss
         // But we keep it for compatibility (it will be 0 when using concat)
         startPosition: startPosition,
+        watermarkImageBase64: channel.config.watermarkImageBase64,
+        watermarkPosition: channel.config.watermarkPosition,
       };
 
       // With concat approach: No onFileEnd callback needed

@@ -22,6 +22,10 @@ export interface ChannelConfig {
   useDynamicPlaylist?: boolean;
   /** Include bumpers between files (default: true for backward compatibility) */
   includeBumpers?: boolean;
+  /** Watermark image stored as base64 encoded PNG */
+  watermarkImageBase64?: string;
+  /** Watermark position on the video */
+  watermarkPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
 }
 
 export interface ChannelMetadata {

@@ -23,6 +23,8 @@ export interface StreamConfig {
   fps: number;
   segmentDuration: number;
   startPosition?: number; // seconds (for resuming mid-file)
+  watermarkImageBase64?: string; // Watermark image as base64 encoded PNG
+  watermarkPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center'; // Watermark position
 }
 
 export interface StreamHandle {
@@ -450,6 +452,55 @@ export class FFmpegEngine {
 
 
   /**
+   * Create temporary watermark file from base64
+   * Returns path to temp file, or null if watermark not provided
+   */
+  private async createWatermarkTempFile(watermarkBase64: string | undefined, outputDir: string): Promise<string | null> {
+    if (!watermarkBase64) {
+      return null;
+    }
+
+    try {
+      // Decode base64 to buffer
+      const watermarkBuffer = Buffer.from(watermarkBase64, 'base64');
+      
+      // Create temp file in output directory
+      const watermarkPath = path.join(outputDir, `watermark_${Date.now()}.png`);
+      await fs.writeFile(watermarkPath, watermarkBuffer);
+      
+      logger.debug({ watermarkPath }, 'Created temporary watermark file');
+      return watermarkPath;
+    } catch (error) {
+      logger.error({ error }, 'Failed to create watermark temp file');
+      return null;
+    }
+  }
+
+  /**
+   * Calculate overlay position based on watermark position setting
+   */
+  private calculateWatermarkPosition(
+    position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center' | undefined
+  ): string {
+    const padding = 10; // 10px padding from edges
+    
+    switch (position) {
+      case 'top-left':
+        return `${padding}:${padding}`;
+      case 'top-right':
+        return `W-w-${padding}:${padding}`;
+      case 'bottom-left':
+        return `${padding}:H-h-${padding}`;
+      case 'bottom-right':
+        return `W-w-${padding}:H-h-${padding}`;
+      case 'center':
+        return `(W-w)/2:(H-h)/2`;
+      default:
+        return `${padding}:${padding}`; // Default to top-left
+    }
+  }
+
+  /**
    * Create FFmpeg command for HLS streaming
    * Uses concat demuxer for seamless transitions, or single file input (legacy)
    */
@@ -463,59 +514,78 @@ export class FFmpegEngine {
       // Concat demuxer approach - seamless transitions
       command = ffmpeg();
       command.input(streamConfig.concatFile);
-      command.inputOptions([
+      // Prepare input options for main video input (concat file)
+      const mainInputOptions: string[] = [
         '-stream_loop', '-1', // Loop concat playlist infinitely for 24/7 streaming
         '-f', 'concat',
         '-safe', '0', // Allow absolute paths
-        // Note: inpoint in concat file seeks to nearest keyframe - not frame-accurate
-        // For more accurate seeking, consider using -ss on individual files before concat
-      ]);
+        // CRITICAL: Timestamp and codec transition handling
+        // genpts: Generate new PTS when missing (critical for concat with different codecs)
+        // igndts: Ignore DTS timestamps (prevents timestamp conflicts during transitions)
+        // flush_packets: Flush decoder when switching inputs (critical for codec transitions)
+        '-fflags', '+genpts+igndts+flush_packets',
+        '-avoid_negative_ts', 'make_zero', // Handle timestamp issues
+        
+        // Codec detection and error resilience
+        '-analyzeduration', '10000000', // 10 seconds - better codec detection
+        '-probesize', '10000000', // Larger probe size for better detection
+        '-err_detect', 'ignore_err', // Ignore decoder errors and continue (prevents crashes on corrupted frames)
+        '-max_interleave_delta', '0', // Prevent interleaving issues during codec transitions
+        
+        // CRITICAL: Add extra resilience for concat demuxer transitions
+        // These help FFmpeg handle codec changes (HEVC -> H.264) and file boundaries
+        '-fpsprobesize', '0', // Don't probe frame rate (faster, prevents issues with mixed codecs)
+        '-thread_queue_size', '512', // Larger thread queue for smoother transitions
+      ];
+      
+      // Hardware acceleration (before seek position)
+      if (config.ffmpeg.hwAccel !== 'none') {
+        mainInputOptions.push('-hwaccel', config.ffmpeg.hwAccel);
+      }
+      
+      // Apply seeking if we need to resume mid-file
+      if (streamConfig.startPosition && streamConfig.startPosition > 0) {
+        // Input seeking (-ss before -i) - faster but less accurate (~keyframe accuracy)
+        mainInputOptions.unshift('-ss', streamConfig.startPosition.toString());
+        logger.debug({ startPosition: streamConfig.startPosition }, 'Seeking to position in file');
+      }
+
+      // Add -re flag for real-time encoding (CRITICAL for proper timing)
+      // Without -re, GPU encodes entire file in seconds, breaking bumper timing
+      // With -re: 81-second file takes 81 wall-clock seconds ? bumper pre-gen works correctly
+      mainInputOptions.push('-re');
+
+      command.inputOptions(mainInputOptions);
     } else if (streamConfig.inputFile) {
       // Legacy single file input
       command = ffmpeg(streamConfig.inputFile);
+      // Prepare input options for single file input
+      const mainInputOptions: string[] = [
+        // CRITICAL: Timestamp and codec transition handling
+        '-fflags', '+genpts+igndts+flush_packets',
+        '-avoid_negative_ts', 'make_zero',
+        '-analyzeduration', '10000000',
+        '-probesize', '10000000',
+        '-err_detect', 'ignore_err',
+        '-max_interleave_delta', '0',
+        '-fpsprobesize', '0',
+        '-thread_queue_size', '512',
+      ];
+      
+      if (config.ffmpeg.hwAccel !== 'none') {
+        mainInputOptions.push('-hwaccel', config.ffmpeg.hwAccel);
+      }
+      
+      if (streamConfig.startPosition && streamConfig.startPosition > 0) {
+        mainInputOptions.unshift('-ss', streamConfig.startPosition.toString());
+        logger.debug({ startPosition: streamConfig.startPosition }, 'Seeking to position in file');
+      }
+      
+      mainInputOptions.push('-re');
+      command.inputOptions(mainInputOptions);
     } else {
       throw new FFmpegError('Either inputFile or concatFile must be provided');
     }
-    
-    // Prepare input options
-    const inputOptions: string[] = [
-      // CRITICAL: Timestamp and codec transition handling
-      // genpts: Generate new PTS when missing (critical for concat with different codecs)
-      // igndts: Ignore DTS timestamps (prevents timestamp conflicts during transitions)
-      // flush_packets: Flush decoder when switching inputs (critical for codec transitions)
-      '-fflags', '+genpts+igndts+flush_packets',
-      '-avoid_negative_ts', 'make_zero', // Handle timestamp issues
-      
-      // Codec detection and error resilience
-      '-analyzeduration', '10000000', // 10 seconds - better codec detection
-      '-probesize', '10000000', // Larger probe size for better detection
-      '-err_detect', 'ignore_err', // Ignore decoder errors and continue (prevents crashes on corrupted frames)
-      '-max_interleave_delta', '0', // Prevent interleaving issues during codec transitions
-      
-      // CRITICAL: Add extra resilience for concat demuxer transitions
-      // These help FFmpeg handle codec changes (HEVC -> H.264) and file boundaries
-      '-fpsprobesize', '0', // Don't probe frame rate (faster, prevents issues with mixed codecs)
-      '-thread_queue_size', '512', // Larger thread queue for smoother transitions
-    ];
-    
-    // Hardware acceleration (before seek position)
-    if (config.ffmpeg.hwAccel !== 'none') {
-      inputOptions.push('-hwaccel', config.ffmpeg.hwAccel);
-    }
-    
-    // Apply seeking if we need to resume mid-file
-    if (streamConfig.startPosition && streamConfig.startPosition > 0) {
-      // Input seeking (-ss before -i) - faster but less accurate (~keyframe accuracy)
-      inputOptions.unshift('-ss', streamConfig.startPosition.toString());
-      logger.debug({ startPosition: streamConfig.startPosition }, 'Seeking to position in file');
-    }
-
-    // Add -re flag for real-time encoding (CRITICAL for proper timing)
-    // Without -re, GPU encodes entire file in seconds, breaking bumper timing
-    // With -re: 81-second file takes 81 wall-clock seconds ? bumper pre-gen works correctly
-    inputOptions.push('-re');
-
-    command.inputOptions(inputOptions);
 
     // Video codec (we'll set bitrate via outputOptions for consistency)
     command.videoCodec('libx264');
@@ -538,12 +608,31 @@ export class FFmpegEngine {
     // Audio codec (we'll set bitrate and channels via outputOptions to avoid duplicates)
     command.audioCodec('aac');
 
+    // Handle watermark if provided (must be done before stream mapping)
+    let watermarkPath: string | null = null;
+    let hasWatermark = false;
+    if (streamConfig.watermarkImageBase64 && streamConfig.watermarkPosition) {
+      watermarkPath = await this.createWatermarkTempFile(streamConfig.watermarkImageBase64, streamConfig.outputDir);
+      if (watermarkPath) {
+        // Add watermark as input with loop option (required for continuous streaming)
+        // -loop 1 loops the image indefinitely, -framerate matches video framerate
+        command.input(watermarkPath);
+        // Note: inputOptions applies to the last input added (the watermark)
+        command.inputOptions(['-loop', '1', '-framerate', streamConfig.fps.toString()]);
+        hasWatermark = true;
+        logger.info({ watermarkPath, position: streamConfig.watermarkPosition }, 'Watermark added to stream');
+      }
+    }
+
     // Explicit stream mapping (map only video and audio, skip subtitles)
     // Use 0:a? to map all audio streams (optional - won't fail if none exist)
     // FFmpeg will automatically skip problematic audio streams and use working ones
     // If a specific stream has decoder errors, FFmpeg will try other audio streams
     // The ? makes it optional so FFmpeg continues even if all audio streams fail
-    command.outputOptions(['-map', '0:v:0', '-map', '0:a?', '-sn']);
+    // Note: When watermark is present, we'll use filter_complex for video, so mapping is handled there
+    if (!hasWatermark) {
+      command.outputOptions(['-map', '0:v:0', '-map', '0:a?', '-sn']);
+    }
 
     // HLS options
     const playlistPath = path.join(streamConfig.outputDir, 'stream.m3u8');
@@ -560,19 +649,49 @@ export class FFmpegEngine {
     const darWidth = width / divisor;
     const darHeight = height / divisor;
 
+    // Build video filter/filter_complex based on whether watermark exists
+    const baseVideoFilter = `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p,fps=${streamConfig.fps},setdar=${darWidth}/${darHeight}`;
+
+    // Add video filter or filter_complex based on watermark presence
+    if (hasWatermark && watermarkPath && streamConfig.watermarkPosition) {
+      // Use filter_complex for watermark overlay (requires multiple inputs)
+      const overlayPosition = this.calculateWatermarkPosition(streamConfig.watermarkPosition);
+      // Filter complex: process main video, then overlay watermark
+      // [0:v] = main video input, [1:v] = watermark input
+      // Scale watermark maintaining aspect ratio, preserve alpha channel for transparency
+      // overlay=...:eof_action=repeat ensures watermark continues even if input ends
+      // format=yuva420p preserves alpha channel (transparency) from PNG
+      const filterComplex = `[0:v]${baseVideoFilter}[main];[1:v]scale=-1:-1,format=yuva420p[wm];[main][wm]overlay=${overlayPosition}:eof_action=repeat[v]`;
+      command
+        .outputOptions([
+          // Force 8-bit pixel format for hardware encoder compatibility
+          '-pix_fmt', 'yuv420p',
+          // Use filter_complex for watermark overlay
+          '-filter_complex', filterComplex,
+          // Map video from filter_complex output and audio from main input
+          '-map', '[v]',
+          '-map', '0:a?',
+          '-sn',
+        ]);
+    } else {
+      // No watermark - use simple -vf filter
+      command
+        .outputOptions([
+          // Force 8-bit pixel format for hardware encoder compatibility
+          '-pix_fmt', 'yuv420p',
+          // Smart video filtering - ensure proper dimensions and format
+          // Scale to target resolution maintaining aspect ratio, pad with black if needed
+          // Using lanczos resampling algorithm for better quality when upscaling
+          // flags=lanczos provides better quality than default (bicubic) for upscaling
+          // DAR calculated dynamically from resolution (not hardcoded to 16:9)
+          // CRITICAL: Add fps filter to normalize frame rate during codec transitions
+          // This ensures smooth transitions between files with different native frame rates
+          '-vf', baseVideoFilter,
+        ]);
+    }
+
     command
       .outputOptions([
-        // Force 8-bit pixel format for hardware encoder compatibility
-        '-pix_fmt', 'yuv420p',
-
-        // Smart video filtering - ensure proper dimensions and format
-        // Scale to target resolution maintaining aspect ratio, pad with black if needed
-        // Using lanczos resampling algorithm for better quality when upscaling
-        // flags=lanczos provides better quality than default (bicubic) for upscaling
-        // DAR calculated dynamically from resolution (not hardcoded to 16:9)
-        // CRITICAL: Add fps filter to normalize frame rate during codec transitions
-        // This ensures smooth transitions between files with different native frame rates
-        '-vf', `scale=${width}:${height}:flags=lanczos:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,format=yuv420p,fps=${streamConfig.fps},setdar=${darWidth}/${darHeight}`,
         
         // HLS Output Settings
         '-f', 'hls',
@@ -643,7 +762,7 @@ export class FFmpegEngine {
         
         // CRITICAL: Additional settings for smooth codec transitions
         // These help FFmpeg handle transitions between different input codecs (HEVC, H.264, etc.)
-        '-vsync', 'cfr', // Constant frame rate output (matches fps_mode cfr)
+        // Note: -fps_mode cfr is already set above, -vsync is deprecated
         '-async_depth', '1', // Minimize audio/video sync issues during transitions
         // Note: genpts in input options handles timestamp continuity, no need for copyts
         

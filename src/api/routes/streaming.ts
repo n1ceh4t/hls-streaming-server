@@ -187,7 +187,10 @@ stream.m3u8
 
       res.setHeader('Content-Type', 'video/mp2t');
       res.setHeader('Content-Length', stats.size);
-      res.setHeader('Cache-Control', 'max-age=3600');
+      // Shorter cache time for segments (30 seconds) to prevent serving stale segments after restart
+      // Playlists are no-cache, but segments need some cache for performance
+      // 30 seconds balances performance with freshness for live streaming
+      res.setHeader('Cache-Control', 'max-age=30, must-revalidate');
 
       const stream = createReadStream(segmentPath);
 
