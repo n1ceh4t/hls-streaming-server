@@ -1566,6 +1566,8 @@
                 if (!content.dataset.loaded) {
                     content.innerHTML = await loadTabContent('buckets');
                     content.dataset.loaded = 'true';
+                    // Attach event listener to form after it's loaded
+                    attachBucketFormListener();
                 }
                 loadBuckets();
             },
@@ -4168,33 +4170,42 @@
             document.getElementById('addBucketForm').style.display = 'none';
         }
 
-        document.getElementById('newBucketForm')?.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            try {
-                const res = await fetch(`${API_BASE}/api/buckets`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({
-                        name: document.getElementById('bucketName').value,
-                        bucketType: document.getElementById('bucketType').value,
-                        description: document.getElementById('bucketDescription').value || undefined,
-                    }),
-                });
+        function attachBucketFormListener() {
+            const form = document.getElementById('newBucketForm');
+            if (form && !form.dataset.listenerAttached) {
+                form.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    try {
+                        const res = await fetch(`${API_BASE}/api/buckets`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({
+                                name: document.getElementById('bucketName').value,
+                                bucketType: document.getElementById('bucketType').value,
+                                description: document.getElementById('bucketDescription').value || undefined,
+                            }),
+                        });
 
-                const data = await res.json();
-                if (res.ok) {
-                    alert('Bucket created successfully!');
-                    hideAddBucketForm();
-                    loadBuckets();
-                } else {
-                    alert(data.error?.message || 'Failed to create bucket');
-                }
-            } catch (error) {
-                alert('Network error. Please try again.');
-                console.error('Failed to create bucket:', error);
+                        const data = await res.json();
+                        if (res.ok) {
+                            alert('Bucket created successfully!');
+                            hideAddBucketForm();
+                            loadBuckets();
+                        } else {
+                            alert(data.error?.message || 'Failed to create bucket');
+                        }
+                    } catch (error) {
+                        alert('Network error. Please try again.');
+                        console.error('Failed to create bucket:', error);
+                    }
+                });
+                form.dataset.listenerAttached = 'true';
             }
-        });
+        }
+
+        // Try to attach listener on page load (in case form already exists)
+        attachBucketFormListener();
 
         async function deleteBucket(bucketId, bucketName) {
             if (!confirm(`Are you sure you want to delete "${bucketName}"? This cannot be undone.`)) {
